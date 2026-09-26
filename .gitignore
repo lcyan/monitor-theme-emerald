@@ -41,8 +41,8 @@ __screenshots__/
 *.timestamp-*-*.mjs
 
 # Theme build output
-komari-theme-*.zip
-bun.lock
+theme.tar.gz
+theme.tar.gz.sha256
 .mimocode
 .zcode
 .playwright-mcp

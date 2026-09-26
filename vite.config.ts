@@ -1,18 +1,19 @@
 import type { Plugin } from 'vite'
 import { execSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { resolve } from 'node:path'
+import { createHash } from 'node:crypto'
+import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
+import * as tar from 'tar'
 import { defineConfig } from 'vite'
 
 import vueDevTools from 'vite-plugin-vue-devtools'
 
-const require = createRequire(import.meta.url)
-const fs = require('node:fs')
-const archiver = require('archiver')
+const root = fileURLToPath(new URL('.', import.meta.url))
 
 function getCommitHash(): string {
   try {
@@ -29,82 +30,80 @@ function shouldIgnoreRollupWarning(warning: { code?: string, id?: string }): boo
 }
 
 /**
- * Vite 插件：构建后打包 Komari 主题 Zip
- * theme.zip
- * ├── komari-theme.json
+ * Vite 插件：构建后打包 monitor 主题，解开即是 hub 读取的主题目录
+ * theme.tar.gz
+ * ├── theme.json
  * ├── preview.png
  * └── dist/
  */
-function komariThemeZip(): Plugin {
+function monitorThemeTar(): Plugin {
   return {
-    name: 'komari-theme-zip',
+    name: 'monitor-theme-tar',
     apply: 'build',
     closeBundle: async () => {
-      const commitHash = getCommitHash()
-      const zipFileName = `komari-theme-emerald-build-${commitHash}.zip`
-      const distDir = resolve(__dirname, 'dist')
-      const themeJsonPath = resolve(__dirname, 'komari-theme.json')
-      const previewPath = resolve(__dirname, 'docs/preview.png')
-      const outputPath = resolve(__dirname, zipFileName)
-
-      if (!existsSync(distDir)) {
-        console.log('[komari-theme-zip] dist directory not found, skipping zip creation')
+      if (!existsSync(resolve(root, 'dist/index.html'))) {
+        console.log('[monitor-theme-tar] dist/index.html not found, skipping archive')
         return
       }
 
-      const output = fs.createWriteStream(outputPath)
-      const archive = archiver('zip', { zlib: { level: 9 } })
+      // preview.png 源文件在 docs/ 下，包里要与 theme.json 同级，借临时目录摆好再打包
+      const staging = mkdtempSync(join(tmpdir(), 'emerald-theme-'))
+      try {
+        const entries = ['dist', 'theme.json']
+        copyFileSync(resolve(root, 'theme.json'), join(staging, 'theme.json'))
+        cpSync(resolve(root, 'dist'), join(staging, 'dist'), { recursive: true })
 
-      return new Promise((resolve, reject) => {
-        output.on('close', () => {
-          const sizeMB = (archive.pointer() / 1024 / 1024).toFixed(2)
-          console.log(`[komari-theme-zip] Created ${zipFileName} (${sizeMB} MB)`)
-          resolve(undefined)
-        })
-
-        archive.on('error', (err: Error) => {
-          console.error('[komari-theme-zip] Error:', err)
-          reject(err)
-        })
-
-        archive.pipe(output)
-
-        if (existsSync(themeJsonPath)) {
-          archive.file(themeJsonPath, { name: 'komari-theme.json' })
-        }
-
+        const previewPath = resolve(root, 'docs/preview.png')
         if (existsSync(previewPath)) {
-          archive.file(previewPath, { name: 'preview.png' })
+          copyFileSync(previewPath, join(staging, 'preview.png'))
+          entries.push('preview.png')
         }
 
-        archive.directory(distDir, 'dist')
+        const output = resolve(root, 'theme.tar.gz')
+        await tar.create({ gzip: { level: 9 }, file: output, cwd: staging, portable: true }, entries)
 
-        archive.finalize()
-      })
+        const sha = createHash('sha256').update(readFileSync(output)).digest('hex')
+        writeFileSync(`${output}.sha256`, `${sha}\n`)
+        const sizeMB = (statSync(output).size / 1024 / 1024).toFixed(2)
+        console.log(`[monitor-theme-tar] Created theme.tar.gz (${sizeMB} MB), sha256 ${sha}`)
+      }
+      finally {
+        rmSync(staging, { recursive: true, force: true })
+      }
     },
   }
 }
 
-const packageJson = require('./package.json')
+const packageJson = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf-8')) as { version: string }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   define: {
     __BUILD_VERSION__: JSON.stringify(packageJson.version),
     __BUILD_GIT_HASH__: JSON.stringify(getCommitHash()),
   },
   plugins: [
     vue(),
-    vueDevTools(),
+    command === 'serve' && vueDevTools(),
     tailwindcss(),
-    komariThemeZip(),
+    monitorThemeTar(),
   ],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  // 主题只读公开数据，任何开着公开页的 hub 都可以当数据源：
+  // MONITOR_HUB=https://hub.example.com bun run dev
+  // changeOrigin 让 hub 前面按 Host 路由的反代 / CDN 能认出请求
   server: {
     host: '0.0.0.0',
+    proxy: {
+      '/api': {
+        target: process.env.MONITOR_HUB || 'http://127.0.0.1:9911',
+        changeOrigin: true,
+        ws: true,
+      },
+    },
   },
   build: {
     chunkSizeWarningLimit: 600,
@@ -124,4 +123,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))
