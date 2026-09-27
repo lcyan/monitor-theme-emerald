@@ -2,7 +2,7 @@
   "name": "Emerald",
   "short": "emerald",
   "description": "翡翠色状态页，地球视图、卡片与列表双模式",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Tokinx, lcyan",
   "url": "https://github.com/lcyan/monitor-theme-emerald",
   "config": [
