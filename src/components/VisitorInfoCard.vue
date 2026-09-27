@@ -50,7 +50,7 @@ const flagVisible = ref(true)
 const expand = ref(false)
 
 const subtitle = computed(() => loading.value ? '检测中' : location.value || '网络访客')
-const flagSrc = computed(() => countryCode.value ? `/assets/flags/${countryCode.value}.svg` : '')
+const flagSrc = computed(() => countryCode.value ? `/flags/${countryCode.value}.svg` : '')
 const displayIp = computed(() => expand.value ? ip.value : maskIpForCollapsedState(ip.value))
 
 const visitorRows = computed<VisitorInfoRow[]>(() => [

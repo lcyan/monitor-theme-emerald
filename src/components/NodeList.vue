@@ -1,19 +1,18 @@
 <script setup lang="ts">
-import type { NodeData } from '@/stores/nodes'
+import type { Node } from '@/api/types'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
 import NodePingListCell from '@/components/NodePingListCell.vue'
 import TrafficProgress from '@/components/TrafficProgress.vue'
-import { Badge } from '@/components/ui/badge'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { ProgressThin } from '@/components/ui/progress-thin'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, getStatus } from '@/utils/helper'
-import { formatOfflineTime, getCustomTags, getPriceTags, getRemainingTimeTagClass, getTrafficUsed, getTrafficUsedPercentage, hasRegion, showTrafficProgress } from '@/utils/nodeHelpers'
+import { formatOfflineTime, getDiskPercentage, getMemPercentage, getPriceTags, getRemainingTimeTagClass, getTrafficUsed, getTrafficUsedPercentage, showTrafficProgress } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
-import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
+import { getFlagSrc, getRegionDisplayName, hasCountry } from '@/utils/regionHelper'
 
 interface ColumnConfig {
   key: string
@@ -23,13 +22,13 @@ interface ColumnConfig {
 }
 
 const props = defineProps<{
-  nodes: NodeData[]
+  nodes: Node[]
   transitionKey?: string
 }>()
 
 const emit = defineEmits<{
-  click: [node: NodeData]
-  pingClick: [node: NodeData]
+  click: [node: Node]
+  pingClick: [node: Node]
 }>()
 
 const rowStaggerMs = 35
@@ -43,7 +42,6 @@ const columns: ColumnConfig[] = [
   { key: 'status', label: '状态', width: '40px', sortable: true },
   { key: 'os', label: '系统', width: '40px', sortable: true },
   { key: 'name', label: '节点', width: 'minmax(160px, 1fr)', sortable: true },
-  { key: 'tags', label: '标签', width: 'minmax(180px, 1fr)', sortable: false },
   { key: 'cpu', label: 'CPU', width: '100px', sortable: true },
   { key: 'mem', label: '内存', width: '100px', sortable: true },
   { key: 'disk', label: '硬盘', width: '100px', sortable: true },
@@ -76,11 +74,6 @@ const sortedNodes = computed(() => {
   return nodes.sort((a, b) => {
     switch (key) {
       case 'status': return dir * ((a.online ? 1 : 0) - (b.online ? 1 : 0))
-      case 'region': {
-        const va = (a.region || '').toLowerCase()
-        const vb = (b.region || '').toLowerCase()
-        return dir * (va < vb ? -1 : va > vb ? 1 : 0)
-      }
       case 'name': {
         const va = (a.name || '').toLowerCase()
         const vb = (b.name || '').toLowerCase()
@@ -91,13 +84,13 @@ const sortedNodes = computed(() => {
         const vb = (b.os || '').toLowerCase()
         return dir * (va < vb ? -1 : va > vb ? 1 : 0)
       }
-      case 'cpu': return dir * ((a.cpu ?? 0) - (b.cpu ?? 0))
-      case 'mem': return dir * ((a.ram ?? 0) / (a.mem_total || 1) - (b.ram ?? 0) / (b.mem_total || 1))
-      case 'disk': return dir * ((a.disk ?? 0) / (a.disk_total || 1) - (b.disk ?? 0) / (b.disk_total || 1))
+      case 'cpu': return dir * ((a.metrics?.cpu ?? 0) - (b.metrics?.cpu ?? 0))
+      case 'mem': return dir * (getMemPercentage(a) - getMemPercentage(b))
+      case 'disk': return dir * (getDiskPercentage(a) - getDiskPercentage(b))
       case 'traffic':
         return dir * (getTrafficUsedPercentage(a) - getTrafficUsedPercentage(b))
       case 'rate':
-        return dir * (((a.net_out ?? 0) + (a.net_in ?? 0)) - ((b.net_out ?? 0) + (b.net_in ?? 0)))
+        return dir * (((a.metrics?.net_tx ?? 0) + (a.metrics?.net_rx ?? 0)) - ((b.metrics?.net_tx ?? 0) + (b.metrics?.net_rx ?? 0)))
       default: return 0
     }
   })
@@ -112,26 +105,23 @@ const gridStyle = computed(() => ({
 const offlineOverlayContentStyle = computed(() => {
   const keys = columnKeys.value
   const statusIndex = keys.indexOf('status')
-  const regionIndex = keys.indexOf('region')
   const nameIndex = keys.indexOf('name')
   const startColumn = nameIndex !== -1
     ? nameIndex + 1
-    : regionIndex !== -1
-      ? regionIndex + 2
-      : statusIndex === -1 ? 1 : statusIndex + 2
+    : statusIndex === -1 ? 1 : statusIndex + 2
   return { gridColumn: `${startColumn} / -1` }
 })
 
-function handleClick(node: NodeData) {
+function handleClick(node: Node) {
   emit('click', node)
 }
 
-function openPingDialog(node: NodeData) {
+function openPingDialog(node: Node) {
   emit('pingClick', node)
 }
 
-function getRowTransitionKey(node: NodeData): string {
-  return props.transitionKey ? `${props.transitionKey}-${node.uuid}` : node.uuid
+function getRowTransitionKey(node: Node): string {
+  return props.transitionKey ? `${props.transitionKey}-${node.id}` : String(node.id)
 }
 
 function getRowTransitionStyle(index: number): Record<string, string> {
@@ -192,23 +182,23 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               <div v-else-if="col.key === 'name'" class="space-y-0.5" :class="[!node.online && 'blur-sm opacity-30']">
                 <div class="flex gap-1 items-center text-xs font-semibold">
                   <img
-                    v-if="hasRegion(node.region)" :src="getFlagSrc(node.region)"
-                    :alt="getRegionDisplayName(node.region)" class="size-5 rounded-sm"
+                    v-if="hasCountry(node.country)" :src="getFlagSrc(node.country)"
+                    :alt="getRegionDisplayName(node.country)" class="size-5 rounded-sm"
                   >
                   <span class="truncate">{{ node.name }}</span>
                 </div>
                 <div class="flex flex-row text-[11px] text-muted-foreground/70">
                   <DataTooltip
-                    v-if="node.online" :content="formatUptime(node.uptime ?? 0)" class="shrink-0" placement="right"
+                    v-if="node.online && node.metrics" :content="formatUptime(node.metrics.uptime)" class="shrink-0" placement="right"
                     content-class="whitespace-pre-wrap left-0 ml-0 w-max"
                   >
                     <span>
-                      {{ formatUptime(node.uptime ?? 0, 'day') }}
+                      {{ formatUptime(node.metrics.uptime, 'day') }}
                     </span>
                   </DataTooltip>
                   <DataTooltip
                     v-if="getPriceTags(node, appStore.lang).length > 0" placement="left"
-                    :content="formatDateTime(node.expired_at, 'YYYY-MM-DD')"
+                    :content="node.expires_at ? formatDateTime(node.expires_at, 'YYYY-MM-DD') : ''"
                     content-class="whitespace-nowrap right-0 mr-0"
                   >
                     <div class="truncate">
@@ -223,22 +213,10 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 </div>
               </div>
 
-              <!-- 标签 -->
-              <div v-else-if="col.key === 'tags'">
-                <div class="flex flex-wrap gap-1 items-center">
-                  <Badge
-                    v-for="(tag, tagIndex) in getCustomTags(node)" :key="tagIndex" variant="outline"
-                    class="!text-[11px] rounded text-muted-foreground border-muted-foreground/10 px-1.5"
-                  >
-                    {{ tag }}
-                  </Badge>
-                </div>
-              </div>
-
               <!-- 三网 -->
               <div v-else-if="col.key === 'networks'" class="flex flex-col gap-0.5">
                 <NodePingListCell
-                  :uuid="node.uuid"
+                  :node-id="node.id"
                   :online="node.online"
                   role="button"
                   tabindex="0"
@@ -260,38 +238,37 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 <div class="space-y-1">
                   <div class="text-[10px] text-muted-foreground truncate">
                     <span class="inline group-hover:hidden">
-                      {{ (node.cpu ?? 0).toFixed(1) }}%
+                      {{ (node.metrics?.cpu ?? 0).toFixed(1) }}%
                     </span>
                     <span class="hidden group-hover:inline">
-                      {{ node.load.toFixed(2) ?? 0 }}, {{ node.load5.toFixed(2) ?? 0 }}, {{ node.load15.toFixed(2) ?? 0
-                      }}
+                      {{ node.metrics?.load?.[0]?.toFixed(2) ?? '0.00' }}, {{ node.metrics?.load?.[1]?.toFixed(2) ?? '0.00' }}, {{ node.metrics?.load?.[2]?.toFixed(2) ?? '0.00' }}
                     </span>
                   </div>
-                  <ProgressThin :percentage="node.cpu ?? 0" :status="getStatus(node.cpu ?? 0)" :height="4" />
+                  <ProgressThin :percentage="node.metrics?.cpu ?? 0" :status="getStatus(node.metrics?.cpu ?? 0)" :height="4" />
                 </div>
               </div>
 
               <!-- 内存 -->
               <div v-else-if="col.key === 'mem'" class="group">
-                <DataTooltip placement="top" class="block" :content-class="[!node.swap && '!hidden']">
+                <DataTooltip placement="top" class="block" :content-class="[!node.metrics?.swap_used && '!hidden']">
                   <div class="space-y-1">
                     <div class="text-[10px] text-muted-foreground truncate">
                       <span class="inline group-hover:hidden">
-                        {{ ((node.ram ?? 0) / (node.mem_total || 1) * 100).toFixed(1) }}%
+                        {{ getMemPercentage(node).toFixed(1) }}%
                       </span>
                       <span class="hidden group-hover:inline">
-                        {{ formatBytes(node.ram ?? 0) }} / {{ formatBytes(node.mem_total ?? 0) }}
+                        {{ formatBytes(node.metrics?.mem_used ?? 0) }} / {{ formatBytes(node.metrics?.mem_total ?? node.mem_total ?? 0) }}
                       </span>
                     </div>
                     <ProgressThin
-                      :percentage="(node.ram ?? 0) / (node.mem_total || 1) * 100"
-                      :status="getStatus((node.ram ?? 0) / (node.mem_total || 1) * 100)" :height="4"
+                      :percentage="getMemPercentage(node)"
+                      :status="getStatus(getMemPercentage(node))" :height="4"
                     />
                   </div>
                   <template #content>
                     <div class="flex items-center justify-between gap-3 whitespace-nowrap">
                       <span class="text-background/70">Swap</span>
-                      <span>{{ formatBytes(node.swap ?? 0) }}</span>
+                      <span>{{ formatBytes(node.metrics?.swap_used ?? 0) }}</span>
                     </div>
                   </template>
                 </DataTooltip>
@@ -302,15 +279,15 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 <div class="space-y-1">
                   <div class="text-[10px] text-muted-foreground truncate">
                     <span class="inline group-hover:hidden">
-                      {{ ((node.disk ?? 0) / (node.disk_total || 1) * 100).toFixed(1) }}%
+                      {{ getDiskPercentage(node).toFixed(1) }}%
                     </span>
                     <span class="hidden group-hover:inline">
-                      {{ formatBytes(node.disk ?? 0) }} / {{ formatBytes(node.disk_total ?? 0) }}
+                      {{ formatBytes(node.metrics?.disk_used ?? 0) }} / {{ formatBytes(node.metrics?.disk_total ?? node.disk_total ?? 0) }}
                     </span>
                   </div>
                   <ProgressThin
-                    :percentage="(node.disk ?? 0) / (node.disk_total || 1) * 100"
-                    :status="getStatus((node.disk ?? 0) / (node.disk_total || 1) * 100)" :height="4"
+                    :percentage="getDiskPercentage(node)"
+                    :status="getStatus(getDiskPercentage(node))" :height="4"
                   />
                 </div>
               </div>
@@ -329,20 +306,16 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                         <template v-else>∞</template>
                       </span>
                     </div>
-                    <TrafficProgress
-                      :upload="node.net_total_up ?? 0" :download="node.net_total_down ?? 0"
-                      :traffic-limit="node.traffic_limit" :traffic-limit-type="(node.traffic_limit_type || 'sum')"
-                      height="4px"
-                    />
+                    <TrafficProgress :node="node" height="4px" />
                   </div>
                   <template #content>
                     <span class="flex flex-row gap-0.5 items-center whitespace-nowrap">
                       <Icon icon="tabler:chevron-up" width="12" height="12" />
-                      {{ formatBytes(node.net_total_up ?? 0) }}
+                      {{ formatBytes(node.month_tx) }}
                     </span>
                     <span class="flex flex-row gap-0.5 items-center whitespace-nowrap">
                       <Icon icon="tabler:chevron-down" width="12" height="12" />
-                      {{ formatBytes(node.net_total_down ?? 0) }}
+                      {{ formatBytes(node.month_rx) }}
                     </span>
                   </template>
                 </DataTooltip>
@@ -353,11 +326,11 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 <div class="text-[10px] flex flex-col ">
                   <span class="text-emerald-600 flex flex-row gap-1 items-center">
                     <Icon icon="tabler:chevron-up" width="12" height="12" />
-                    {{ formatBytesPerSecond(node.net_out ?? 0) }}
+                    {{ formatBytesPerSecond(node.metrics?.net_tx ?? 0) }}
                   </span>
                   <span class="text-blue-600 flex flex-row gap-1 items-center">
                     <Icon icon="tabler:chevron-down" width="12" height="12" />
-                    {{ formatBytesPerSecond(node.net_in ?? 0) }}
+                    {{ formatBytesPerSecond(node.metrics?.net_rx ?? 0) }}
                   </span>
                 </div>
               </div>

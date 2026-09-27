@@ -103,6 +103,28 @@ function gitAdd(files: string[]): void {
   }
 }
 
+function git(args: string[]): void {
+  const result = spawnSync('git', args, {
+    cwd: process.cwd(),
+    stdio: 'inherit',
+  })
+
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed`)
+  }
+}
+
+async function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase()
+    return answer === 'y' || answer === 'yes'
+  }
+  finally {
+    rl.close()
+  }
+}
+
 async function main(): Promise<void> {
   const version = await resolveVersion()
 
@@ -117,8 +139,18 @@ async function main(): Promise<void> {
   }
 
   gitAdd(files)
-  console.log(`Prepared release version ${version}`)
-  console.log(`Staged: ${files.join(', ')}`)
+
+  const tag = `v${version}`
+  if (!(await confirm(`Commit, tag ${tag} and push to trigger the release workflow?`))) {
+    console.log(`Prepared release version ${version}`)
+    console.log(`Staged: ${files.join(', ')}`)
+    return
+  }
+
+  git(['commit', '-m', `release: ${tag}`])
+  git(['tag', tag])
+  git(['push', 'origin', 'HEAD', '--follow-tags'])
+  console.log(`Pushed ${tag}; the release workflow will build and publish theme.tar.gz.`)
 }
 
 main().catch((error) => {

@@ -1,6 +1,6 @@
 import { registerMap } from 'echarts/core'
 import { fetchWithTimeout } from '@/utils/financeHelper'
-import { emojiToRegionMap } from '@/utils/regionHelper'
+import { REGION_INFO } from '@/utils/regionHelper'
 
 type WorldGeoJson = Exclude<
   Parameters<typeof registerMap>[1],
@@ -132,12 +132,12 @@ function normalizeCountryName(name: string): string {
 
 function createAliasToCodeMap(): Map<string, string> {
   const aliasToCodeMap = new Map<string, string>()
-  for (const info of Object.values(emojiToRegionMap)) {
-    for (const alias of [info.code, info.en, info.zh, ...info.aliases]) {
+  for (const [code, info] of Object.entries(REGION_INFO)) {
+    for (const alias of [code, info.en, info.zh]) {
       const key = normalizeCountryName(alias)
       if (!key || aliasToCodeMap.has(key))
         continue
-      aliasToCodeMap.set(key, info.code)
+      aliasToCodeMap.set(key, code)
     }
   }
   return aliasToCodeMap

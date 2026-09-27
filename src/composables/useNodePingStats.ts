@@ -1,17 +1,29 @@
 import type { MaybeRefOrGetter } from 'vue'
-import type { PublicPingTaskOrderItem } from '@/utils/pingTaskOrder'
-import { useThrottleFn } from '@vueuse/core'
-import { computed, onScopeDispose, ref, shallowRef, toValue, watch } from 'vue'
-import {
+import type { PingRow } from '@/api/types'
+import { computed, ref, toValue, watch } from 'vue'
+import { fetchHistory } from '@/api/history'
 
-  sortTasksByPublicOrder,
-} from '@/utils/pingTaskOrder'
-import { getSharedRpc } from '@/utils/rpc'
+/**
+ * 单节点近一小时 ping 概览，供列表 / 卡片的三网延迟条使用。
+ *
+ * 数据经 `fetchHistory` 的并发队列（客户端上限 2）与 60s TTL 缓存：同一节点
+ * 的重复调用、多节点同时进视口的爆发请求，都会在队列与缓存处收敛。
+ * 是否发起请求由调用方的 enabled 控制——列表用 IntersectionObserver 只对
+ * 视口内节点取数。
+ */
 
 export interface NodePingHistoryPoint {
+  /** ISO 时间串，仅作 tooltip 与 key 使用 */
   time: string
   latency: number | null
   loss: number | null
+}
+
+export interface NodePingPerTaskStat {
+  taskId: number
+  name: string
+  avgLatency: number
+  loss: number
 }
 
 export interface NodePingStatsState {
@@ -23,56 +35,9 @@ export interface NodePingStatsState {
   perTaskStats: NodePingPerTaskStat[]
 }
 
-interface PingRecord {
-  client: string
-  task_id: number
-  time: string
-  value: number
-}
-
-interface SharedPingRecordsResponse {
-  records?: PingRecord[]
-  tasks?: PingTaskInfo[]
-}
-
-interface PingTaskInfo {
-  id: number
-  name: string
-}
-
-interface SharedPingRecordsState {
-  recordsByClient: Map<string, PingRecord[]>
-  tasks: PingTaskInfo[]
-}
-
-interface SharedPingRecordsEntry {
-  data: ReturnType<typeof shallowRef<SharedPingRecordsState | null>>
-  loading: ReturnType<typeof ref<boolean>>
-  error: ReturnType<typeof ref<string | null>>
-  promise: Promise<void> | null
-  refreshTimer: ReturnType<typeof setInterval> | null
-  subscribers: number
-  lastFetchedAt: number
-}
-
-export interface NodePingPerTaskStat {
-  taskId: number
-  name: string
-  avgLatency: number
-  loss: number
-}
-
 export const NODE_PING_BAR_COUNT = 10
-const CACHE_VERSION = 6
-const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
+const QUERY_HOURS = 1
 const FULL_LOSS_EPSILON = 1e-6
-const PING_RECORD_REFRESH_INTERVAL_MS = 60_000
-const sharedPingRecordsCache = new Map<number, SharedPingRecordsEntry>()
-
-interface TaskRecordSummary {
-  total: number
-  success: number
-}
 
 function createEmptyStats(): NodePingStatsState {
   return {
@@ -89,271 +54,6 @@ function average(values: number[]): number {
   if (!values.length)
     return 0
   return values.reduce((sum, value) => sum + value, 0) / values.length
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
-}
-
-function summarizeTaskRecords(records: PingRecord[]): Map<number, TaskRecordSummary> {
-  const summaries = new Map<number, TaskRecordSummary>()
-
-  for (const record of records) {
-    const summary = summaries.get(record.task_id) ?? { total: 0, success: 0 }
-    summary.total += 1
-    if (record.value >= 0) {
-      summary.success += 1
-    }
-    summaries.set(record.task_id, summary)
-  }
-
-  return summaries
-}
-
-function getIncludedTaskIds(records: PingRecord[]): Set<number> {
-  const recordSummaries = summarizeTaskRecords(records)
-
-  return new Set(
-    [...recordSummaries.entries()]
-      .filter(([, summary]) => summary.total > 0 && summary.success > 0)
-      .map(([taskId]) => taskId),
-  )
-}
-
-function getCacheKey(uuid: string, hours: number): string {
-  return `${CACHE_KEY_PREFIX}:${uuid}:${hours}`
-}
-
-function isValidHistoryPoint(value: unknown): value is NodePingHistoryPoint {
-  if (!value || typeof value !== 'object')
-    return false
-
-  const point = value as Record<string, unknown>
-  const latency = point.latency
-  const loss = point.loss
-
-  return typeof point.time === 'string'
-    && (latency === null || typeof latency === 'number')
-    && (loss === null || typeof loss === 'number')
-}
-
-function isValidStatsState(value: unknown): value is NodePingStatsState {
-  if (!value || typeof value !== 'object')
-    return false
-
-  const state = value as Record<string, unknown>
-  return typeof state.avgLatency === 'number'
-    && typeof state.avgLoss === 'number'
-    && typeof state.avgVolatility === 'number'
-    && typeof state.hasData === 'boolean'
-    && Array.isArray(state.history)
-    && state.history.every(isValidHistoryPoint)
-    && Array.isArray(state.perTaskStats)
-}
-
-function readStatsCache(uuid: string, hours: number): NodePingStatsState | null {
-  if (typeof window === 'undefined')
-    return null
-
-  try {
-    const raw = window.localStorage.getItem(getCacheKey(uuid, hours))
-    if (!raw)
-      return null
-
-    const parsed = JSON.parse(raw) as { version?: number, stats?: unknown }
-    if (parsed.version !== CACHE_VERSION || !isValidStatsState(parsed.stats))
-      return null
-
-    return parsed.stats
-  }
-  catch {
-    return null
-  }
-}
-
-function writeStatsCache(uuid: string, hours: number, value: NodePingStatsState): void {
-  if (typeof window === 'undefined')
-    return
-
-  try {
-    window.localStorage.setItem(
-      getCacheKey(uuid, hours),
-      JSON.stringify({
-        version: CACHE_VERSION,
-        updatedAt: new Date().toISOString(),
-        stats: value,
-      }),
-    )
-  }
-  catch {
-  }
-}
-
-function createSharedPingRecordsEntry(): SharedPingRecordsEntry {
-  return {
-    data: shallowRef<SharedPingRecordsState | null>(null),
-    loading: ref(false),
-    error: ref<string | null>(null),
-    promise: null,
-    refreshTimer: null,
-    subscribers: 0,
-    lastFetchedAt: 0,
-  }
-}
-
-function getSharedPingRecordsEntry(hours: number): SharedPingRecordsEntry {
-  const cachedEntry = sharedPingRecordsCache.get(hours)
-  if (cachedEntry)
-    return cachedEntry
-
-  const nextEntry = createSharedPingRecordsEntry()
-  sharedPingRecordsCache.set(hours, nextEntry)
-  return nextEntry
-}
-
-function buildRecordsByClient(records: PingRecord[]): Map<string, PingRecord[]> {
-  const grouped = new Map<string, PingRecord[]>()
-
-  for (const record of records) {
-    if (!record.client)
-      continue
-
-    const clientRecords = grouped.get(record.client) ?? []
-    clientRecords.push(record)
-    grouped.set(record.client, clientRecords)
-  }
-
-  for (const clientRecords of grouped.values()) {
-    clientRecords.sort(
-      (left, right) => new Date(left.time).getTime() - new Date(right.time).getTime(),
-    )
-  }
-
-  return grouped
-}
-
-async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: number): Promise<void> {
-  if (entry.promise)
-    return entry.promise
-
-  const rpc = getSharedRpc()
-  entry.loading.value = true
-  entry.error.value = null
-
-  entry.promise = (async () => {
-    try {
-      const [result, publicTasks] = await Promise.all([
-        rpc.getClient().call<SharedPingRecordsResponse>('common:getRecords', {
-          type: 'ping',
-          // 新版 getRecords 可能只返回近期可用样本，hours 仅作为服务端查询窗口。
-          hours,
-        }),
-        // getRecords 的 tasks 不一定带 weight；用 getPublicPingTasks 对齐后台拖拽顺序
-        rpc.getClient().call<PublicPingTaskOrderItem[]>('public:getPublicPingTasks').catch(() => []),
-      ])
-
-      const publicTaskList = Array.isArray(publicTasks) ? publicTasks : []
-      const recordTasks = result?.tasks ?? []
-      const orderedTasks = publicTaskList.length
-        ? sortTasksByPublicOrder(
-            recordTasks.length
-              ? recordTasks
-              : publicTaskList.map(task => ({ id: task.id, name: task.name || `Ping ${task.id}` })),
-            publicTaskList,
-          )
-        : recordTasks
-
-      entry.data.value = {
-        recordsByClient: buildRecordsByClient(result?.records ?? []),
-        tasks: orderedTasks,
-      }
-      entry.lastFetchedAt = Date.now()
-    }
-    catch (err) {
-      entry.error.value = err instanceof Error ? err.message : '获取 Ping 历史失败'
-      throw err
-    }
-    finally {
-      entry.loading.value = false
-      entry.promise = null
-    }
-  })()
-
-  return entry.promise
-}
-
-function startSharedPingRecordsRefresh(entry: SharedPingRecordsEntry, hours: number): void {
-  if (entry.refreshTimer)
-    return
-
-  entry.refreshTimer = setInterval(() => {
-    void loadSharedPingRecords(entry, hours).catch(() => {})
-  }, PING_RECORD_REFRESH_INTERVAL_MS)
-}
-
-function stopSharedPingRecordsRefresh(entry: SharedPingRecordsEntry): void {
-  if (!entry.refreshTimer)
-    return
-
-  clearInterval(entry.refreshTimer)
-  entry.refreshTimer = null
-}
-
-function retainSharedPingRecordsEntry(hours: number): () => void {
-  const entry = getSharedPingRecordsEntry(hours)
-  entry.subscribers += 1
-  startSharedPingRecordsRefresh(entry, hours)
-
-  let released = false
-  return () => {
-    if (released)
-      return
-
-    released = true
-    entry.subscribers = Math.max(0, entry.subscribers - 1)
-    if (entry.subscribers === 0)
-      stopSharedPingRecordsRefresh(entry)
-  }
-}
-
-function buildPingHistory(records: PingRecord[]): NodePingHistoryPoint[] {
-  const sortedRecords = records
-    .map((record) => {
-      const timestamp = new Date(record.time).getTime()
-      return { ...record, timestamp }
-    })
-    .filter(record => Number.isFinite(record.timestamp))
-    .sort((left, right) => left.timestamp - right.timestamp)
-
-  if (!sortedRecords.length)
-    return []
-
-  const firstTime = sortedRecords[0]?.timestamp ?? 0
-  const lastTime = sortedRecords.at(-1)?.timestamp ?? firstTime
-  const bucketCount = Math.min(NODE_PING_BAR_COUNT, sortedRecords.length)
-  const bucketSize = Math.max(1, (lastTime - firstTime) / bucketCount)
-
-  return Array.from({ length: bucketCount }, (_, index) => {
-    const startTime = firstTime + bucketSize * index
-    const endTime = index === bucketCount - 1 ? lastTime + 1 : startTime + bucketSize
-    const bucketRecords = sortedRecords.filter(
-      record => record.timestamp >= startTime && record.timestamp < endTime,
-    )
-    const validLatencyRecords = bucketRecords.filter(record => record.value >= 0)
-    const lostCount = bucketRecords.length - validLatencyRecords.length
-    const latency = validLatencyRecords.length
-      ? average(validLatencyRecords.map(record => record.value))
-      : null
-    const loss = bucketRecords.length
-      ? lostCount / bucketRecords.length * 100
-      : null
-
-    return {
-      time: new Date(startTime).toISOString(),
-      latency,
-      loss,
-    }
-  })
 }
 
 function getPercentile(values: number[], percentile: number): number | null {
@@ -375,202 +75,140 @@ function getPercentile(values: number[], percentile: number): number | null {
   return lowerValue + (upperValue - lowerValue) * (position - lowerIndex)
 }
 
-function buildStats(records: PingRecord[], tasks: PingTaskInfo[]): NodePingStatsState {
-  const includedTaskIds = getIncludedTaskIds(records)
+/**
+ * hub 返回的行已按探测顺序、探测内按时间排好。把所有探测的行并成时间有序
+ * 后切成 N 个桶，每个桶取有效延迟的均值与行内丢包的均值。
+ */
+function buildHistory(rows: PingRow[]): NodePingHistoryPoint[] {
+  const sorted = [...rows].sort((a, b) => a.ts - b.ts)
+  if (!sorted.length)
+    return []
 
-  if (!includedTaskIds.size)
+  const bucketCount = Math.min(NODE_PING_BAR_COUNT, sorted.length)
+  const firstTs = sorted[0]!.ts
+  const lastTs = sorted.at(-1)!.ts
+  const bucketSize = Math.max(1, (lastTs - firstTs + 1) / bucketCount)
+
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+    time: new Date((firstTs + index * bucketSize) * 1000).toISOString(),
+    latencySum: 0,
+    latencyCount: 0,
+    lossSum: 0,
+    lossCount: 0,
+  }))
+
+  for (const row of sorted) {
+    const index = Math.min(bucketCount - 1, Math.floor((row.ts - firstTs) / bucketSize))
+    const bucket = buckets[index]
+    if (!bucket)
+      continue
+    if (row.latency !== null) {
+      bucket.latencySum += row.latency
+      bucket.latencyCount++
+    }
+    bucket.lossSum += row.loss ?? 0
+    bucket.lossCount++
+  }
+
+  return buckets.map(({ time, latencySum, latencyCount, lossSum, lossCount }) => ({
+    time,
+    latency: latencyCount ? latencySum / latencyCount : null,
+    loss: lossCount ? lossSum / lossCount : null,
+  }))
+}
+
+function buildStats(rows: PingRow[], probes: Record<string, string>, windowLoss: Record<string, number>): NodePingStatsState {
+  if (!rows.length)
     return createEmptyStats()
 
-  const filteredRecords = records.filter(record => includedTaskIds.has(record.task_id))
-  const history = buildPingHistory(filteredRecords)
-  const taskRecords = new Map<number, PingRecord[]>()
-
-  for (const record of filteredRecords) {
-    const currentRecords = taskRecords.get(record.task_id) ?? []
-    currentRecords.push(record)
-    taskRecords.set(record.task_id, currentRecords)
+  // 探测按行首次出现顺序（即后台顺序）；窗口丢包率只用响应的 loss，不平均行内值
+  const byTask = new Map<number, PingRow[]>()
+  for (const row of rows) {
+    const list = byTask.get(row.task_id) ?? []
+    list.push(row)
+    byTask.set(row.task_id, list)
   }
 
   const latencyValues: number[] = []
   const taskLossValues: number[] = []
   const volatilityValues: number[] = []
+  const perTaskStats: NodePingPerTaskStat[] = []
 
-  for (const recordsByTask of taskRecords.values()) {
-    const validValues = recordsByTask
-      .map(record => record.value)
-      .filter(value => value >= 0)
+  for (const [taskId, taskRows] of byTask) {
+    const validValues = taskRows.map(row => row.latency).filter((v): v is number => v !== null)
 
-    if (!validValues.length)
-      continue
+    const avgLatency = validValues.length ? average(validValues) : -1
+    const loss = windowLoss[String(taskId)] ?? 0
+    const name = probes[String(taskId)] ?? `Ping ${taskId}`
+    perTaskStats.push({ taskId, name, avgLatency, loss })
 
-    latencyValues.push(average(validValues))
-    taskLossValues.push((recordsByTask.length - validValues.length) / recordsByTask.length * 100)
-
-    if (validValues.length > 1) {
-      const p50 = getPercentile(validValues, 0.5)
-      const p99 = getPercentile(validValues, 0.99)
-      if (isFiniteNumber(p50) && isFiniteNumber(p99) && p50 > FULL_LOSS_EPSILON) {
-        volatilityValues.push(p99 / p50)
+    if (validValues.length) {
+      latencyValues.push(avgLatency)
+      taskLossValues.push(loss)
+      if (validValues.length > 1) {
+        const p50 = getPercentile(validValues, 0.5)
+        const p99 = getPercentile(validValues, 0.99)
+        if (p50 !== null && p99 !== null && p50 > FULL_LOSS_EPSILON)
+          volatilityValues.push(p99 / p50)
       }
     }
   }
 
-  const historyLatencyValues = history
-    .map(point => point.latency)
-    .filter(isFiniteNumber)
-  const historyLossValues = history
-    .map(point => point.loss)
-    .filter(isFiniteNumber)
-
-  const avgLatency = latencyValues.length ? average(latencyValues) : average(historyLatencyValues)
-  const avgLoss = taskLossValues.length ? average(taskLossValues) : average(historyLossValues)
-  const avgVolatility = average(volatilityValues)
-  const hasData = history.length > 0 || latencyValues.length > 0 || taskLossValues.length > 0
-
-  const taskOrderMap = new Map(tasks.map((t, index) => [t.id, index]))
-  const taskNameMap = new Map(tasks.map(t => [t.id, t.name]))
-  const perTaskStats: NodePingPerTaskStat[] = Array.from(taskRecords.entries(), ([taskId, taskRecs]) => {
-    const validValues = taskRecs.map(r => r.value).filter(v => v >= 0)
-    const avgLatency = validValues.length ? average(validValues) : -1
-    const loss = taskRecs.length
-      ? (taskRecs.length - validValues.length) / taskRecs.length * 100
-      : 100
-    const name = taskNameMap.get(taskId) ?? `Ping ${taskId}`
-    return { taskId, name, avgLatency, loss }
-  })
-    .sort((a, b) => (taskOrderMap.get(a.taskId) ?? 0) - (taskOrderMap.get(b.taskId) ?? 0))
+  const history = buildHistory(rows)
+  const historyLatency = history.map(p => p.latency).filter((v): v is number => v !== null)
 
   return {
-    avgLatency,
-    avgLoss,
-    avgVolatility,
+    avgLatency: latencyValues.length ? average(latencyValues) : average(historyLatency),
+    avgLoss: average(taskLossValues),
+    avgVolatility: average(volatilityValues),
     history,
-    hasData,
+    hasData: history.length > 0,
     perTaskStats,
   }
 }
 
 export function useNodePingStats(
-  uuid: MaybeRefOrGetter<string>,
-  options?: {
-    hours?: MaybeRefOrGetter<number>
-    enabled?: MaybeRefOrGetter<boolean>
-  },
+  nodeId: MaybeRefOrGetter<number | null | undefined>,
+  options?: { enabled?: MaybeRefOrGetter<boolean> },
 ) {
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const stats = ref<NodePingStatsState>(createEmptyStats())
 
   const resolved = computed(() => ({
-    uuid: toValue(uuid),
-    hours: Math.max(1, Math.floor(toValue(options?.hours) ?? 24)),
+    nodeId: toValue(nodeId) ?? null,
     enabled: toValue(options?.enabled) ?? true,
   }))
 
-  let activeHours: number | null = null
-  let releaseSharedRecords: (() => void) | null = null
+  let requestSeq = 0
 
-  function syncSharedRecordsSubscription(hours: number | null): void {
-    if (activeHours === hours)
-      return
-
-    releaseSharedRecords?.()
-    releaseSharedRecords = null
-    activeHours = null
-
-    if (hours === null)
-      return
-
-    releaseSharedRecords = retainSharedPingRecordsEntry(hours)
-    activeHours = hours
-  }
-
-  onScopeDispose(() => {
-    syncSharedRecordsSubscription(null)
-  })
-
-  // stats 由共享 getRecords 的近期样本派生，不将结果视为完整的 hours 时段数据。
-  const stats = computed<NodePingStatsState>(() => {
-    const { uuid: nodeUuid, hours, enabled } = resolved.value
-    if (!enabled || !nodeUuid.trim())
-      return createEmptyStats()
-
-    // 通过 getSharedPingRecordsEntry 读取（不存在则创建），确保 computed 始终对
-    // entry.data 这个 shallowRef 建立响应式依赖——即便首次加载尚未返回。
-    const entry = getSharedPingRecordsEntry(hours)
-    const state = entry.data.value
-    if (!state)
-      return readStatsCache(nodeUuid, hours) ?? createEmptyStats()
-
-    const records = state.recordsByClient.get(nodeUuid) ?? []
-    return records.length ? buildStats(records, state.tasks) : createEmptyStats()
-  })
-
-  // 副作用：按需触发首次共享加载并维护 loading/error，不再命令式写入 stats。
-  watch(
-    resolved,
-    async (next, _previous, onCleanup) => {
-      let cancelled = false
-      onCleanup(() => {
-        cancelled = true
-      })
-
-      const { uuid: nodeUuid, hours, enabled } = next
-      if (!enabled || !nodeUuid.trim()) {
-        syncSharedRecordsSubscription(null)
-        loading.value = false
-        error.value = null
-        return
-      }
-
-      syncSharedRecordsSubscription(hours)
-      const entry = getSharedPingRecordsEntry(hours)
-      const shouldLoadRecords = !entry.data.value
-        || Date.now() - entry.lastFetchedAt >= PING_RECORD_REFRESH_INTERVAL_MS
-
-      if (!shouldLoadRecords) {
-        loading.value = false
-        error.value = null
-        return
-      }
-
-      const shouldShowLoading = !entry.data.value
-      loading.value = shouldShowLoading
+  watch(resolved, async ({ nodeId: id, enabled }) => {
+    const seq = ++requestSeq
+    if (!enabled || id === null) {
+      loading.value = false
       error.value = null
-
-      try {
-        await loadSharedPingRecords(entry, hours)
-      }
-      catch (err) {
-        if (!cancelled && shouldShowLoading)
-          error.value = err instanceof Error ? err.message : '获取 Ping 历史失败'
-      }
-      finally {
-        if (!cancelled)
-          loading.value = false
-      }
-    },
-    { immediate: true },
-  )
-
-  const perTaskStats = computed<NodePingPerTaskStat[]>(() => stats.value.perTaskStats)
-
-  // 共享记录会定时刷新，节流回写 localStorage，避免多节点同时重算时密集写盘。
-  const persistStats = useThrottleFn(
-    (nodeUuid: string, hours: number, value: NodePingStatsState) => {
-      writeStatsCache(nodeUuid, hours, value)
-    },
-    PING_RECORD_REFRESH_INTERVAL_MS,
-    true,
-    true,
-  )
-
-  watch(stats, (value) => {
-    if (!value.hasData)
       return
-    const { uuid: nodeUuid, hours, enabled } = resolved.value
-    if (enabled && nodeUuid.trim())
-      persistStats(nodeUuid, hours, value)
-  })
+    }
+
+    loading.value = !stats.value.hasData
+    error.value = null
+    try {
+      // 60s TTL 缓存在 fetchHistory 内部：可见性反复变化不会重复打 hub
+      const response = await fetchHistory(id, { hours: QUERY_HOURS, points: NODE_PING_BAR_COUNT, series: 'ping' })
+      if (seq !== requestSeq)
+        return
+      stats.value = buildStats(response.ping, response.probes, response.loss)
+    }
+    catch (e) {
+      if (seq !== requestSeq)
+        return
+      error.value = e instanceof Error ? e.message : '获取 Ping 历史失败'
+    }
+    finally {
+      if (seq === requestSeq)
+        loading.value = false
+    }
+  }, { immediate: true })
 
   return {
     stats,
@@ -581,6 +219,6 @@ export function useNodePingStats(
     avgLoss: computed(() => stats.value.avgLoss),
     avgVolatility: computed(() => stats.value.avgVolatility),
     hasData: computed(() => stats.value.hasData),
-    perTaskStats,
+    perTaskStats: computed(() => stats.value.perTaskStats),
   }
 }

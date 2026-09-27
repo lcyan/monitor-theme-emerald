@@ -1,29 +1,14 @@
 <script setup lang="ts">
-import type { VersionInfo } from '@/utils/api'
-import { computed, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import VisitorInfoCard from '@/components/VisitorInfoCard.vue'
 import { useAppStore } from '@/stores/app'
-import { getSharedApi } from '@/utils/api'
+import manifest from '../../theme.json'
 
 const appStore = useAppStore()
-const api = getSharedApi()
 
 const buildVersion = __BUILD_VERSION__
 const buildGitHash = __BUILD_GIT_HASH__
-
-const serverVersion = ref<VersionInfo | null>(null)
-
-onMounted(async () => {
-  try {
-    serverVersion.value = await api.getVersion()
-  }
-  catch {
-    // 静默失败
-  }
-})
-
-const formattedServerVersion = computed(() => serverVersion.value?.version ?? null)
 
 const showIcp = computed(() => appStore.icpEnabled && appStore.icpNumber)
 const showPolice = computed(() => appStore.policeEnabled && appStore.policeNumber)
@@ -36,31 +21,25 @@ const showFiling = computed(() => showIcp.value || showPolice.value)
     <div class="flex flex-row items-center justify-between  text-xs text-muted-foreground">
       <div class="flex gap-1 items-center">
         Powered by
-        <DataTooltip
-          as="span"
-          placement="top"
-          :content="formattedServerVersion ?? ''"
+        <a
+          href="https://github.com/monitor-probe/monitor" target="_blank" rel="noopener noreferrer"
+          class="transition-opacity hover:opacity-80"
         >
-          <a
-            href="https://github.com/komari-monitor/komari" target="_blank" rel="noopener noreferrer"
-            class="transition-opacity hover:opacity-80"
-          >
-            <span class="font-medium text-foreground">Komari Monitor</span>
-          </a>
-        </DataTooltip>
+          <span class="font-medium text-foreground">monitor</span>
+        </a>
       </div>
       <div class="flex flex-wrap gap-1 items-center">
         Theme by
         <DataTooltip
           as="span"
           placement="top"
-          :content="`v${buildVersion}\n${buildGitHash}`"
+          :content="`Emerald v${manifest.version}\n${buildVersion}\n${buildGitHash}`"
         >
           <a
-            href="https://github.com/Tokinx/komari-theme-emerald" target="_blank" rel="noopener noreferrer"
+            href="https://github.com/lcyan/monitor-theme-emerald" target="_blank" rel="noopener noreferrer"
             class="transition-opacity hover:opacity-80"
           >
-            <span class="font-medium text-foreground">Komari Emerald</span>
+            <span class="font-medium text-foreground">Emerald</span>
           </a>
         </DataTooltip>
       </div>

@@ -1,4 +1,5 @@
-import type { NodeData } from '@/stores/nodes'
+import type { Node } from '@/api/types'
+import { daysUntilDate } from '@/utils/helper'
 
 const FINANCE_CURRENCY_CONFIG = {
   AUD: { rate: 0.20941, symbol: 'A$' },
@@ -81,10 +82,22 @@ interface ExchangeRatesCache {
   rates: Partial<Record<CurrencyCode, number>>
 }
 
-const CACHE_KEY = 'komari_finance_exchange_rates_cny_v1'
-const MS_PER_DAY = 24 * 60 * 60 * 1000
+const CACHE_KEY = 'emerald_finance_exchange_rates_cny_v1'
 const MONTH_DAYS = 30
-const LONG_TERM_YEARS = 100
+
+/**
+ * 计费周期的日历天数（monitor 的 billing_cycle 枚举），
+ * `once` 为买断，不参与剩余价值与月均折算。
+ */
+export const BILLING_CYCLE_DAYS: Record<string, number> = {
+  monthly: 30,
+  quarterly: 90,
+  semiannual: 180,
+  yearly: 365,
+  biennial: 730,
+  triennial: 1095,
+  once: 0,
+}
 
 export const DEFAULT_EXCHANGE_RATES = Object.fromEntries(
   Object.entries(FINANCE_CURRENCY_CONFIG).map(([currency, config]) => [currency, config.rate]),
@@ -158,11 +171,6 @@ export function getTodayDateKey(date = new Date()): string {
   return `${year}-${month}-${day}`
 }
 
-export function shouldExcludeFreeNodes(): boolean {
-  const value = getLocalStorageItem('fin_exclude_free')
-  return value === null ? true : value === 'true'
-}
-
 export function getStoredFinanceCurrency(): CurrencyCode {
   return normalizeCurrency(getLocalStorageItem('fin_currency') || 'CNY')
 }
@@ -172,95 +180,71 @@ export function setStoredFinanceCurrency(currency: CurrencyCode): void {
 }
 
 export function calculateTotalRemainingValueCNY(
-  nodes: NodeData[],
+  nodes: Node[],
   exchangeRates: ExchangeRates,
-  excludeFreeTags = true,
   now = new Date(),
 ): number {
-  return nodes.reduce((sum, node) => {
-    if (excludeFreeTags && node.tags?.includes('白嫖中'))
-      return sum
-
-    return sum + calculateRemainingValueCNY(node, exchangeRates, now)
-  }, 0)
+  return nodes.reduce((sum, node) => sum + calculateRemainingValueCNY(node, exchangeRates, now), 0)
 }
 
 export function calculateTotalValueCNY(
-  nodes: NodeData[],
+  nodes: Node[],
   exchangeRates: ExchangeRates,
-  excludeFreeTags = true,
 ): number {
-  return nodes.reduce((sum, node) => {
-    if (excludeFreeTags && node.tags?.includes('白嫖中'))
-      return sum
-
-    return sum + getPriceCNY(node, exchangeRates)
-  }, 0)
+  return nodes.reduce((sum, node) => sum + getPriceCNY(node, exchangeRates), 0)
 }
 
 export function calculateValueCNY(
-  node: NodeData,
+  node: Node,
   exchangeRates: ExchangeRates,
 ): number {
   return getPriceCNY(node, exchangeRates)
 }
 
 export function calculateTotalMonthlyAverageCostCNY(
-  nodes: NodeData[],
+  nodes: Node[],
   exchangeRates: ExchangeRates,
-  excludeFreeTags = true,
 ): number {
-  return nodes.reduce((sum, node) => {
-    if (excludeFreeTags && node.tags?.includes('白嫖中'))
-      return sum
-
-    return sum + calculateMonthlyAverageCostCNY(node, exchangeRates)
-  }, 0)
+  return nodes.reduce((sum, node) => sum + calculateMonthlyAverageCostCNY(node, exchangeRates), 0)
 }
 
 export function calculateMonthlyAverageCostCNY(
-  node: NodeData,
+  node: Node,
   exchangeRates: ExchangeRates,
 ): number {
   const priceCNY = getPriceCNY(node, exchangeRates)
   if (priceCNY <= 0)
     return 0
 
-  const billingCycle = Number(node.billing_cycle)
-  if (!Number.isFinite(billingCycle) || billingCycle <= 0)
+  const cycleDays = BILLING_CYCLE_DAYS[node.billing_cycle] ?? 0
+  if (cycleDays <= 0)
     return 0
 
-  return priceCNY / billingCycle * MONTH_DAYS
+  return priceCNY / cycleDays * MONTH_DAYS
 }
 
 export function calculateRemainingValueCNY(
-  node: NodeData,
+  node: Node,
   exchangeRates: ExchangeRates,
   now = new Date(),
 ): number {
-  if (!node.expired_at)
+  const cycleDays = BILLING_CYCLE_DAYS[node.billing_cycle] ?? 0
+  // 买断或未知周期没有"剩余"的概念
+  if (cycleDays <= 0)
     return 0
 
   const priceCNY = getPriceCNY(node, exchangeRates)
   if (priceCNY <= 0)
     return 0
 
-  const expiredAt = new Date(node.expired_at).getTime()
-  if (!Number.isFinite(expiredAt))
+  // hub 的 expires_in 按 hub 日历折算，是唯一权威；旧版 hub 缺省时回落解析 expires_at
+  const daysLeft = typeof node.expires_in === 'number' ? node.expires_in : daysUntilDate(node.expires_at, now)
+  if (daysLeft === null)
+    return 0
+  if (daysLeft <= 0)
     return 0
 
-  const diffMs = expiredAt - now.getTime()
-  const diffYears = diffMs / (MS_PER_DAY * 365)
-
-  if (diffYears > LONG_TERM_YEARS)
-    return priceCNY
-
-  const billingCycle = Number(node.billing_cycle)
-  const billingCycleMs = billingCycle * MS_PER_DAY
-  if (diffMs > 0 && billingCycleMs > 0)
-    return priceCNY * (diffMs / billingCycleMs)
-
-  return 0
+  return priceCNY * Math.min(daysLeft / cycleDays, 1)
 }
 
 export function formatFinanceAmount(amount: number, currency: CurrencyCode): {
@@ -318,7 +302,7 @@ export async function getDailyExchangeRates(): Promise<{
   }
 }
 
-function getPriceCNY(node: NodeData, exchangeRates: ExchangeRates): number {
+function getPriceCNY(node: Node, exchangeRates: ExchangeRates): number {
   const price = Number(node.price)
   if (!Number.isFinite(price) || price <= 0)
     return 0

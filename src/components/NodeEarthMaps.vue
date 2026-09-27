@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts/types/dist/shared'
-import type { NodeData } from '@/stores/nodes'
+import type { Node } from '@/api/types'
 import { computed, onMounted, ref } from 'vue'
 import VChart from 'vue-echarts'
 import { Empty } from '@/components/ui/empty'
@@ -8,7 +8,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { ensureWorldMapRegistered } from '@/utils/echartsWorldMap'
-import { getCoordByCode, getCountryCodeFromRegion } from '@/utils/geoHelper'
+import { getCoordByCode, getCountryCode } from '@/utils/geoHelper'
 import { getRegionDisplayName } from '@/utils/regionHelper'
 import '@/utils/echarts'
 
@@ -22,7 +22,7 @@ interface EarthMapPoint {
 }
 
 const props = defineProps<{
-  nodes?: NodeData[]
+  nodes?: Node[]
 }>()
 
 const appStore = useAppStore()
@@ -36,9 +36,9 @@ const regionDisplayNames = typeof Intl.DisplayNames === 'function'
   ? new Intl.DisplayNames(['zh-Hans'], { type: 'region' })
   : null
 
-function resolveCountryDisplayName(region: string, code: string): string {
-  const regionName = getRegionDisplayName(region)
-  if (regionName !== region)
+function resolveCountryDisplayName(country: string, code: string): string {
+  const regionName = getRegionDisplayName(country)
+  if (regionName !== country)
     return regionName
 
   return regionDisplayNames?.of(code) ?? code
@@ -47,7 +47,7 @@ function resolveCountryDisplayName(region: string, code: string): string {
 const points = computed<EarthMapPoint[]>(() => {
   const map = new Map<string, EarthMapPoint>()
   for (const node of displayNodes.value) {
-    const code = getCountryCodeFromRegion(node.region)
+    const code = getCountryCode(node.country)
     if (!code)
       continue
     const coord = getCoordByCode(code)
@@ -57,7 +57,7 @@ const points = computed<EarthMapPoint[]>(() => {
     if (!current) {
       map.set(code, {
         code,
-        name: resolveCountryDisplayName(node.region, code),
+        name: resolveCountryDisplayName(node.country, code),
         coord,
         online: node.online ? 1 : 0,
         offline: node.online ? 0 : 1,
@@ -152,7 +152,7 @@ const chartOption = computed<EChartsOption>(() => ({
       const p = params as { name: string, data: { code: string, online: number, offline: number } }
       if (!p.data)
         return ''
-      const flag = `<img src="/assets/flags/${p.data.code}.svg" style="width:16px;height:16px;vertical-align:middle;margin-right:2px" />`
+      const flag = `<img src="/flags/${p.data.code}.svg" style="width:16px;height:16px;vertical-align:middle;margin-right:2px" />`
       const dot = (color: string) => `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${color}"></span>`
       const online = `<span style="display:flex;gap:4px;align-items:center">${dot(chartThemeColors.value.dotEmerald)} ${p.data.online}</span>`
       const offline = p.data.offline > 0 ? ` <span style="display:flex;gap:4px;align-items:center">${dot(chartThemeColors.value.dotYellow)} ${p.data.offline}</span>` : ''
@@ -251,7 +251,7 @@ onMounted(async () => {
   <div class="relative h-full border-none" content-class="h-full !p-0">
     <!-- 预加载国旗图片，避免 tooltip 重复请求 -->
     <div class="hidden">
-      <img v-for="point in points" :key="point.code" :src="`/assets/flags/${point.code}.svg`">
+      <img v-for="point in points" :key="point.code" :src="`/flags/${point.code}.svg`">
     </div>
     <div class="relative flex h-88 flex-col items-center">
       <div

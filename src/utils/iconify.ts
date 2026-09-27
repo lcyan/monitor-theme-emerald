@@ -1,12 +1,15 @@
+import { addCollection } from '@iconify/vue'
+import { offlineCollections } from '@/generated/icons'
+
 /**
- * Iconify 集合预注册（可选）
+ * Iconify 离线注册。
  *
- * 默认行为：`<Icon icon="icon-park-outline:sun" />` 在未注册集合时
- * 会从 https://api.iconify.design 按需拉取单个图标 SVG（带浏览器缓存）。
- *
- * 此函数保留作为未来扩展入口；当前不做预注册，避免把整个
- * 图标集合（每个 1MB+）打进首屏 bundle。
+ * @iconify/vue 默认在运行时从 api.iconify.design 按需拉取图标，自托管
+ * 页面在访客网络受限时图标会全部显示不出来。这里把源码中实际用到的
+ * 图标（`bun run icons` 生成，见 scripts/generate-icons.ts）在启动时
+ * 注册为离线集合，之后不再有任何 CDN 请求。
  */
 export async function setupIconify(): Promise<void> {
-  // no-op：交给 @iconify/vue 默认 CDN 加载策略
+  for (const collection of offlineCollections)
+    addCollection(collection)
 }

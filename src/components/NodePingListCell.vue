@@ -1,21 +1,32 @@
 <script setup lang="ts">
+import { useIntersectionObserver } from '@vueuse/core'
+import { onScopeDispose, ref } from 'vue'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { useNodePingDisplay } from '@/composables/useNodePingDisplay'
 
 const props = defineProps<{
-  uuid: string
+  nodeId: number
   online: boolean
 }>()
+
+// 只对视口内的节点发起延迟查询；离开视口即停，再次进入时由 TTL 缓存兜底
+const rootRef = ref<HTMLElement | null>(null)
+const visible = ref(false)
+const { stop } = useIntersectionObserver(rootRef, ([entry]) => {
+  visible.value = !!entry?.isIntersecting
+}, { threshold: 0 })
 
 const {
   latencyRenderBars,
   lossRenderBars,
   topPingNetworks,
-} = useNodePingDisplay(() => props.uuid)
+} = useNodePingDisplay(() => props.nodeId, { enabled: visible })
+
+onScopeDispose(() => stop())
 </script>
 
 <template>
-  <div class="flex flex-col">
+  <div ref="rootRef" class="flex flex-col">
     <div v-if="topPingNetworks.length > 0" class="flex flex-row">
       <DataTooltip
         v-for="(net, index) in topPingNetworks" :key="net.name" placement="top"

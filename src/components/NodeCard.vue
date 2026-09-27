@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import type { NodeData } from '@/stores/nodes'
+import type { Node } from '@/api/types'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
-import { Badge } from '@/components/ui/badge'
 import { CardX } from '@/components/ui/card-x'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { ProgressThin } from '@/components/ui/progress-thin'
@@ -11,25 +10,26 @@ import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useNodePingDisplay } from '@/composables/useNodePingDisplay'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, getStatus } from '@/utils/helper'
-import { getCustomTags, getDiskPercentage, getMemPercentage, getPriceTags, getRemainingTimeTagClass, getTrafficUsed, getTrafficUsedPercentage, hasRegion, showTrafficProgress } from '@/utils/nodeHelpers'
+import { getDiskPercentage, getExpireTextClass, getMemPercentage, getPriceTags, getTrafficUsed, getTrafficUsedPercentage, showTrafficProgress } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
-import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
+import { getFlagSrc, getRegionDisplayName, hasCountry } from '@/utils/regionHelper'
 
-const props = defineProps<{ node: NodeData }>()
+const props = defineProps<{ node: Node }>()
 
 const emit = defineEmits<{
   click: []
-  pingClick: [node: NodeData]
+  pingClick: [node: Node]
 }>()
 
 const appStore = useAppStore()
 const { pickSurfaceClass } = useBackgroundSurface()
 const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 
-const offlineTime = computed(() => formatDateTime(props.node.time))
-const expiredDate = computed(() => formatDateTime(props.node.expired_at, 'YYYY-MM-DD'))
+const offlineTime = computed(() => props.node.last_seen ? formatDateTime(new Date(props.node.last_seen * 1000)) : '')
+const expiredDate = computed(() => props.node.expires_at ? formatDateTime(props.node.expires_at, 'YYYY-MM-DD') : '')
 
-const cpuStatus = computed(() => getStatus(props.node.cpu ?? 0))
+const cpu = computed(() => props.node.metrics?.cpu ?? 0)
+const cpuStatus = computed(() => getStatus(cpu.value))
 const memPercentage = computed(() => getMemPercentage(props.node))
 const memStatus = computed(() => getStatus(memPercentage.value))
 const diskPercentage = computed(() => getDiskPercentage(props.node))
@@ -43,13 +43,12 @@ const {
   latencyPanelTooltip,
   lossPanelTooltip,
   topPingNetworks,
-} = useNodePingDisplay(() => props.node.uuid)
+} = useNodePingDisplay(() => props.node.id)
 
 const trafficUsedPercentage = computed(() => getTrafficUsedPercentage(props.node))
 const trafficUsed = computed(() => getTrafficUsed(props.node))
 const priceTags = computed(() => getPriceTags(props.node, appStore.lang))
-const remainingTimeTagClass = computed(() => getRemainingTimeTagClass(props.node))
-const customTags = computed(() => getCustomTags(props.node))
+const remainingTimeTagClass = computed(() => getExpireTextClass(props.node))
 
 function openPingDialog() {
   emit('pingClick', props.node)
@@ -81,8 +80,8 @@ function openPingDialog() {
       <div class="flex gap-2 items-center">
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
-          v-if="hasRegion(props.node.region)" :src="getFlagSrc(props.node.region)"
-          :alt="getRegionDisplayName(props.node.region)" class="size-5 shrink-0"
+          v-if="hasCountry(props.node.country)" :src="getFlagSrc(props.node.country)"
+          :alt="getRegionDisplayName(props.node.country)" class="size-5 shrink-0"
         >
       </div>
     </template>
@@ -96,12 +95,11 @@ function openPingDialog() {
               <span class="text-muted-foreground">
                 CPU
               </span>
-              <span>{{ (props.node.cpu ?? 0).toFixed(1) }}%</span>
+              <span>{{ cpu.toFixed(1) }}%</span>
             </div>
-            <ProgressThin :percentage="props.node.cpu ?? 0" :status="cpuStatus" :height="4" />
+            <ProgressThin :percentage="cpu" :status="cpuStatus" :height="4" />
             <div class="text-[11px] text-muted-foreground truncate">
-              {{ props.node.load.toFixed(2) ?? 0 }}, {{ props.node.load5.toFixed(2) ?? 0 }}, {{
-                props.node.load15.toFixed(2) ?? 0 }}
+              {{ props.node.metrics?.load?.[0]?.toFixed(2) ?? '0.00' }}, {{ props.node.metrics?.load?.[1]?.toFixed(2) ?? '0.00' }}, {{ props.node.metrics?.load?.[2]?.toFixed(2) ?? '0.00' }}
             </div>
           </div>
 
@@ -114,14 +112,14 @@ function openPingDialog() {
               <span>{{ memPercentage.toFixed(1) }}%</span>
             </div>
             <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" />
-            <DataTooltip placement="top" class="block" :content-class="[!props.node.swap && '!hidden']">
+            <DataTooltip placement="top" class="block" :content-class="[!props.node.metrics?.swap_used && '!hidden']">
               <div class="text-[11px] text-muted-foreground truncate">
-                {{ formatBytes(props.node.ram ?? 0) }} / {{ formatBytes(props.node.mem_total ?? 0) }}
+                {{ formatBytes(props.node.metrics?.mem_used ?? 0) }} / {{ formatBytes(props.node.metrics?.mem_total ?? props.node.mem_total ?? 0) }}
               </div>
               <template #content>
                 <div class="flex items-center justify-between gap-3 whitespace-nowrap">
                   <span class="text-background/70">Swap</span>
-                  <span>{{ formatBytes(props.node.swap ?? 0) }}</span>
+                  <span>{{ formatBytes(props.node.metrics?.swap_used ?? 0) }}</span>
                 </div>
               </template>
             </DataTooltip>
@@ -137,7 +135,7 @@ function openPingDialog() {
             </div>
             <ProgressThin :percentage="diskPercentage" :status="diskStatus" :height="4" />
             <div class="text-[11px] text-muted-foreground truncate">
-              {{ formatBytes(props.node.disk ?? 0) }} / {{ formatBytes(props.node.disk_total ?? 0) }}
+              {{ formatBytes(props.node.metrics?.disk_used ?? 0) }} / {{ formatBytes(props.node.metrics?.disk_total ?? props.node.disk_total ?? 0) }}
             </div>
           </div>
 
@@ -165,11 +163,11 @@ function openPingDialog() {
                   <div class="text-[11px] flex flex-col">
                     <div class="flex flex-row items-center gap-1">
                       <Icon icon="tabler:chevron-up" width="12" height="12" />
-                      {{ formatBytes(props.node.net_total_up ?? 0) }}
+                      {{ formatBytes(props.node.month_tx) }}
                     </div>
                     <div class="flex flex-row items-center gap-1">
                       <Icon icon="tabler:chevron-down" width="12" height="12" />
-                      {{ formatBytes(props.node.net_total_down ?? 0) }}
+                      {{ formatBytes(props.node.month_rx) }}
                     </div>
                   </div>
                 </div>
@@ -194,11 +192,11 @@ function openPingDialog() {
               <div class="truncate flex flex-row gap-1">
                 <div class="text-green-600 flex flex-row items-center gap-1">
                   <Icon icon="tabler:chevron-up" width="12" height="12" />
-                  {{ formatBytesPerSecond(props.node.net_out ?? 0) }}
+                  {{ formatBytesPerSecond(props.node.metrics?.net_tx ?? 0) }}
                 </div>
                 <div class="text-blue-600 flex flex-row items-center gap-1">
                   <Icon icon="tabler:chevron-down" width="12" height="12" />
-                  {{ formatBytesPerSecond(props.node.net_in ?? 0) }}
+                  {{ formatBytesPerSecond(props.node.metrics?.net_rx ?? 0) }}
                 </div>
               </div>
             </div>
@@ -208,7 +206,7 @@ function openPingDialog() {
               </span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
               <span class="truncate">
-                {{ props.node.uptime > 0 ? formatUptime(props.node.uptime) : '' }}
+                {{ props.node.metrics && props.node.metrics.uptime > 0 ? formatUptime(props.node.metrics.uptime) : '' }}
               </span>
             </div>
             <div class="flex items-center justify-between">
@@ -216,7 +214,7 @@ function openPingDialog() {
                 费用
               </span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
-              <DataTooltip placement="left" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
+              <DataTooltip v-if="expiredDate" placement="left" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
                 <span class="truncate flex flex-row gap-1">
                   <template v-for="(tag, index) in priceTags" :key="tag.text">
                     <span class="inline-flex flex-row gap-1 items-center">
@@ -226,6 +224,14 @@ function openPingDialog() {
                   </template>
                 </span>
               </DataTooltip>
+              <span v-else class="truncate flex flex-row gap-1">
+                <template v-for="(tag, index) in priceTags" :key="tag.text">
+                  <span class="inline-flex flex-row gap-1 items-center">
+                    <span :class="tag.highlight ? remainingTimeTagClass : ''">{{ tag.text }}</span>
+                  </span>
+                  <span v-if="index < priceTags.length - 1">·</span>
+                </template>
+              </span>
             </div>
             <div class="flex items-center justify-between">
               <span class="truncate">
@@ -304,14 +310,6 @@ function openPingDialog() {
               </div>
             </div>
           </div>
-        </div>
-        <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1 items-center">
-          <Badge
-            v-for="(tag, index) in customTags" :key="index" variant="outline"
-            class="!text-[11px] rounded text-muted-foreground border-muted-foreground/10 px-1.5"
-          >
-            {{ tag }}
-          </Badge>
         </div>
       </div>
     </template>

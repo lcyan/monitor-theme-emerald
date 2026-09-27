@@ -9,8 +9,8 @@ const router = createRouter({
       component: () => import('@/views/HomeView.vue'),
     },
     {
-      path: '/instance/:id',
-      name: 'instance-detail',
+      path: '/node/:id',
+      name: 'node-detail',
       component: () => import('@/views/InstanceDetail.vue'),
     },
   ],

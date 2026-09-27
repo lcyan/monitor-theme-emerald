@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Arc, COBEOptions, Globe, Marker } from 'cobe'
 import type { ComponentPublicInstance } from 'vue'
-import type { NodeData } from '@/stores/nodes'
+import type { Node } from '@/api/types'
 import { Icon } from '@iconify/vue'
 import {
   useDocumentVisibility,
@@ -13,11 +13,11 @@ import createGlobe from 'cobe'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
-import { getCoordByCode, getCountryCodeFromRegion } from '@/utils/geoHelper'
+import { getCoordByCode, getCountryCode } from '@/utils/geoHelper'
 import { formatBytesPerSecondSplit } from '@/utils/helper'
 
 const props = defineProps<{
-  nodes?: NodeData[]
+  nodes?: Node[]
 }>()
 
 const appStore = useAppStore()
@@ -113,7 +113,7 @@ interface RegionRate {
 const regionClusters = computed<RegionCluster[]>(() => {
   const map = new Map<string, RegionCluster>()
   for (const node of displayNodes.value) {
-    const code = getCountryCodeFromRegion(node.region)
+    const code = getCountryCode(node.country)
     if (!code)
       continue
     const coord = getCoordByCode(code)
@@ -137,7 +137,7 @@ const regionRates = computed<Map<string, RegionRate>>(() => {
   for (const node of displayNodes.value) {
     if (!node.online)
       continue
-    const code = getCountryCodeFromRegion(node.region)
+    const code = getCountryCode(node.country)
     if (!code)
       continue
     let entry = map.get(code)
@@ -145,8 +145,8 @@ const regionRates = computed<Map<string, RegionRate>>(() => {
       entry = { up: 0, down: 0 }
       map.set(code, entry)
     }
-    entry.up += node.net_out || 0
-    entry.down += node.net_in || 0
+    entry.up += node.metrics?.net_tx ?? 0
+    entry.down += node.metrics?.net_rx ?? 0
   }
   return map
 })
@@ -505,7 +505,7 @@ function formatRate(bytesPerSec: number): string {
         class="absolute -top-7.5 left-0 pointer-events-none rounded backdrop-blur transition-[opacity,filter] duration-500"
       >
         <img
-          :src="`/assets/flags/${cluster.code}.svg`" :alt="cluster.code"
+          :src="`/flags/${cluster.code}.svg`" :alt="cluster.code"
           class="size-4 block absolute -bottom-2 -left-2 z-1"
         >
         <div class="relative z-2 bg-background/60 rounded py-0.5 px-1 text-xs zoom-80 items-start justify-center text-nowrap">

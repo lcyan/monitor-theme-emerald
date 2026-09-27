@@ -12,7 +12,7 @@ const appStore = useAppStore()
 
 const isScrolled = inject<ReturnType<typeof ref<boolean>>>('isScrolled', ref(false))
 
-const siteFavicon = ref('/favicon.ico')
+const siteFavicon = ref('/favicon.svg')
 
 const actionButtons = computed(() => {
   const buttons = [
@@ -23,7 +23,7 @@ const actionButtons = computed(() => {
     },
   ]
 
-  if (appStore.isLoggedIn || !appStore.hideAdminEntryWhenLoggedOut) {
+  if (appStore.authed || !appStore.hideAdminEntryWhenLoggedOut) {
     buttons.push({
       title: '后台管理',
       icon: 'icon-park-outline:setting',
@@ -44,7 +44,7 @@ function handleButtonClick(action: string) {
   }
 }
 
-const sitename = computed(() => appStore.publicSettings?.sitename || 'Komari Monitor')
+const sitename = computed(() => appStore.siteName)
 </script>
 
 <template>

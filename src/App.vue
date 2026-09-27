@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted } from 'vue'
 import { Toaster } from '@/components/ui/sonner'
 import { useAppStore } from '@/stores/app'
-import { destroyInitManager, initApp } from '@/utils/init'
+import { useNodesStore } from '@/stores/nodes'
 import Background from './components/Background.vue'
 import Footer from './components/Footer.vue'
 import Header from './components/Header.vue'
@@ -10,23 +10,13 @@ import LoadingCover from './components/LoadingCover.vue'
 import Provider from './components/Provider.vue'
 
 const appStore = useAppStore()
-
-const isReady = ref(false)
+const nodesStore = useNodesStore()
 
 onMounted(async () => {
-  try {
-    await initApp()
-    await nextTick()
-    isReady.value = true
-  }
-  catch (error) {
-    console.error('[App] Initialization failed:', error)
-    isReady.value = true
-  }
-})
-
-onUnmounted(() => {
-  destroyInitManager()
+  // 站点信息 + 主题设置（内部各自失败回落），实时流并行启动
+  nodesStore.start()
+  await appStore.bootstrap()
+  appStore.loading = false
 })
 </script>
 

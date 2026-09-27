@@ -287,3 +287,21 @@ export function formatDateTime(timestamp: string | Date | undefined, format = 'Y
 
   return date.format(format)
 }
+
+/** YYYY-MM-DD 前缀匹配（允许带时间部分） */
+const DATE_PREFIX_REGEX = /^(\d{4})-(\d{2})-(\d{2})/
+
+/**
+ * 计算距 YYYY-MM-DD 日期的日历天数，负数表示已过。
+ * 两侧都按 UTC 日零点折算，差值不受访客时区影响；无效日期返回 null。
+ */
+export function daysUntilDate(date: string | null | undefined, now = new Date()): number | null {
+  if (!date)
+    return null
+  const match = DATE_PREFIX_REGEX.exec(date.trim())
+  if (!match)
+    return null
+  const target = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((target - today) / 86_400_000)
+}

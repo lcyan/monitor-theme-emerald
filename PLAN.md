@@ -17,41 +17,85 @@
 
 ## 0. monitor 主题契约（据 hub 源码 `src/api.rs`、`src/frontend.rs`、`web-admin`）
 
-| 项 | monitor |
-|---|---|
-| 清单 | `theme.json`：`name/short/description/version/author/url` 六个字符串必填，可选 `config` 数组 |
-| 发布包 | `theme.tar.gz`，根目录即主题目录：`dist/index.html`、`theme.json`、`preview.png`（可选），≤ 32 MiB |
-| short | `emerald`（仅 `[A-Za-z0-9_-]`），安装目录名 = short |
-| 在线更新 | hub 按 `url`（须为 `https://github.com/<owner>/<repo>`）查 `releases/latest`，只下载名为 `theme.tar.gz` 的资产；tag 与已装 `version` 不同即提示更新 |
-| 站点/登录 | `GET /api/me` → `{authed, github, site_name, public_page, site}` |
-| 节点 | `GET /api/nodes` → `{nodes: Node[], admin}`；匿名只返回 `public` 节点，无 `ip/hostname/remark`；公开页关闭时 401 |
-| 实时 | `GET /api/ws`，hub 每 2s 推同样的 `{nodes, admin}`；断开需自行重连，期间 5s 轮询 `/api/nodes` |
-| 历史 | `GET /api/nodes/{id}/metrics?hours=&points=&series=metrics\|ping`；匿名 hours ≤168，登录 ≤2160，静默 clamp |
-| 历史并发 | hub 全局 4 个并发，超出 **503「查询历史的请求太多」** |
-| 主题设置 | `GET /api/themes/emerald/config` → 只含与默认值不同的项；站长可 `PUT` 同址保存 |
-| 路由 | 未知路径回落 `dist/index.html`；`/admin/*` 属 hub；`dist/assets/*` 被设为 immutable 1 年缓存 |
+| 项        | monitor                                                                                                                                             |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 清单      | `theme.json`：`name/short/description/version/author/url` 六个字符串必填，可选 `config` 数组                                                        |
+| 发布包    | `theme.tar.gz`，根目录即主题目录：`dist/index.html`、`theme.json`、`preview.png`（可选），≤ 32 MiB                                                  |
+| short     | `emerald`（仅 `[A-Za-z0-9_-]`），安装目录名 = short                                                                                                 |
+| 在线更新  | hub 按 `url`（须为 `https://github.com/<owner>/<repo>`）查 `releases/latest`，只下载名为 `theme.tar.gz` 的资产；tag 与已装 `version` 不同即提示更新 |
+| 站点/登录 | `GET /api/me` → `{authed, github, site_name, public_page, site}`                                                                                    |
+| 节点      | `GET /api/nodes` → `{nodes: Node[], admin}`；匿名只返回 `public` 节点，无 `ip/hostname/remark`；公开页关闭时 401                                    |
+| 实时      | `GET /api/ws`，hub 每 2s 推同样的 `{nodes, admin}`；断开需自行重连，期间 5s 轮询 `/api/nodes`                                                       |
+| 历史      | `GET /api/nodes/{id}/metrics?hours=&points=&series=metrics\|ping`；匿名 hours ≤168，登录 ≤2160，静默 clamp                                          |
+| 历史并发  | hub 全局 4 个并发，超出 **503「查询历史的请求太多」**                                                                                               |
+| 主题设置  | `GET /api/themes/emerald/config` → 只含与默认值不同的项；站长可 `PUT` 同址保存                                                                      |
+| 路由      | 未知路径回落 `dist/index.html`；`/admin/*` 属 hub；`dist/assets/*` 被设为 immutable 1 年缓存                                                        |
 
 ### 数据结构（直接作为主题内部类型）
 
 ```ts
-type Metrics = {
-  uptime, cpu, load: [n, n, n], mem_total, mem_used, swap_total, swap_used,
-  disk_total, disk_used, net_rx, net_tx, total_rx, total_tx, month_rx, month_tx, tcp, udp, procs
+interface Metrics {
+  uptime
+  cpu
+  load: [n, n, n]
+  mem_total
+  mem_used
+  swap_total
+  swap_used
+  disk_total
+  disk_used
+  net_rx
+  net_tx
+  total_rx
+  total_tx
+  month_rx
+  month_tx
+  tcp
+  udp
+  procs
 }
-type Node = {
-  id: number, name, sort, public, online, country /* ISO alpha-2，可空 */, group?,
-  last_seen, metrics: Metrics | null,
-  os, kernel, arch, virt, cpu_name, cpu_cores, mem_total, swap_total, disk_total, agent_version,
-  price, currency, billing_cycle /* monthly|quarterly|semiannual|yearly|biennial|triennial|once */,
-  expires_at: string | null, expires_in?: number | null /* hub 日历上的剩余天数 */,
-  traffic_limit, traffic_mode, traffic_reset_day,
-  total_rx, total_tx, month_rx, month_tx, month_used?, month_start, day_rx, day_tx,
+interface Node {
+  id: number
+  name
+  sort
+  public
+  online
+  country /* ISO alpha-2，可空 */
+  group?
+  last_seen
+  metrics: Metrics | null
+  os
+  kernel
+  arch
+  virt
+  cpu_name
+  cpu_cores
+  mem_total
+  swap_total
+  disk_total
+  agent_version
+  price
+  currency
+  billing_cycle /* monthly|quarterly|semiannual|yearly|biennial|triennial|once */
+  expires_at: string | null
+  expires_in?: number | null /* hub 日历上的剩余天数 */
+  traffic_limit
+  traffic_mode
+  traffic_reset_day
+  total_rx
+  total_tx
+  month_rx
+  month_tx
+  month_used?
+  month_start
+  day_rx
+  day_tx
 }
 // metrics 历史行
-type MetricRow = { ts, cpu, mem_used, disk_used, net_rx, net_tx }
+interface MetricRow { ts, cpu, mem_used, disk_used, net_rx, net_tx }
 // ping 历史行（按后台探测顺序、每个探测内按时间排好）
-type PingRow = { task_id, ts, latency: number | null, band?: [min, max], loss?: number }
-type MetricsResponse = { metrics: MetricRow[], ping: PingRow[], probes: Record<string, string>, loss: Record<string, number> }
+interface PingRow { task_id, ts, latency: number | null, band?: [min, max], loss?: number }
+interface MetricsResponse { metrics: MetricRow[], ping: PingRow[], probes: Record<string, string>, loss: Record<string, number> }
 ```
 
 monitor 没有的：GPU、温度、标签、公开备注、IPv4/IPv6、自动续费、隐藏标记、实时状态里的延迟汇总 → 对应 UI 删除。
@@ -78,7 +122,7 @@ monitor 新增可用：`day_rx/day_tx`、`month_used`、`traffic_reset_day`、`m
 
 ## 3. `theme.json`
 
-```json
+```
 {
   "name": "Emerald",
   "short": "emerald",
@@ -93,19 +137,19 @@ monitor 新增可用：`day_rx/day_tx`、`month_used`、`traffic_reset_day`、`m
 `config` 格式（后台 `configForm()` 校验，不合法的字段会被丢弃）：
 `{type:"title", label}` 或 `{key, type: string|text|number|boolean|select, label, help, default, options?: [{value,label}], min?, max?}`
 
-| 保留项 | 类型 | 默认 |
-|---|---|---|
-| 基础：`defaultViewMode` | select card/list | card |
-| 基础：`listPingEnabled`（新） | boolean | **true** |
-| 基础：`pingNetworkOrder` | string（探测名，逗号分隔） | "" |
-| 基础：`offlineNodesLast` | boolean | false |
-| 公告：`alertEnabled` / `alertTitle` / `alertContent` | boolean / string / text | false / "" / "" |
-| 页面：`earthViewMode` | select earth/earth-stop/maps/cards/hide | earth |
-| 页面：`visitorInfoCardEnabled` / `hideAdminEntryWhenLoggedOut` / `disablePageAnimation` | boolean | true / false / false |
-| 备案：`icpEnabled/icpNumber/icpUrl/policeEnabled/policeNumber/policeUrl` | boolean/string | 同原主题 |
-| 背景：`backgroundEnabled` / `backgroundType` / `lightBackgroundUrl` / `darkBackgroundUrl` | boolean/select/string | 同原主题 |
-| 背景：`backgroundBlur` | number 0–50 | 0 |
-| 背景：`backgroundOverlay` | number -100–100 | 0 |
+| 保留项                                                                                    | 类型                                    | 默认                 |
+| ----------------------------------------------------------------------------------------- | --------------------------------------- | -------------------- |
+| 基础：`defaultViewMode`                                                                   | select card/list                        | card                 |
+| 基础：`listPingEnabled`（新）                                                             | boolean                                 | **true**             |
+| 基础：`pingNetworkOrder`                                                                  | string（探测名，逗号分隔）              | ""                   |
+| 基础：`offlineNodesLast`                                                                  | boolean                                 | false                |
+| 公告：`alertEnabled` / `alertTitle` / `alertContent`                                      | boolean / string / text                 | false / "" / ""      |
+| 页面：`earthViewMode`                                                                     | select earth/earth-stop/maps/cards/hide | earth                |
+| 页面：`visitorInfoCardEnabled` / `hideAdminEntryWhenLoggedOut` / `disablePageAnimation`   | boolean                                 | true / false / false |
+| 备案：`icpEnabled/icpNumber/icpUrl/policeEnabled/policeNumber/policeUrl`                  | boolean/string                          | 同原主题             |
+| 背景：`backgroundEnabled` / `backgroundType` / `lightBackgroundUrl` / `darkBackgroundUrl` | boolean/select/string                   | 同原主题             |
+| 背景：`backgroundBlur`                                                                    | number 0–50                             | 0                    |
+| 背景：`backgroundOverlay`                                                                 | number -100–100                         | 0                    |
 
 删除：`dataUpdateInterval`、`rpcTransportMode`（推送由 hub 决定，WS 失败自动轮询）。
 
@@ -181,10 +225,10 @@ monitor 新增可用：`day_rx/day_tx`、`month_used`、`traffic_reset_day`、`m
 
 ## 工作量
 
-| 阶段 | 估计 |
-|---|---|
-| 1–3 工程 / 打包 / 清单 | 0.5 天 |
-| 4 数据层 | 1 天 |
-| 5 图表 + 列表延迟 | 1.5 天 |
-| 6 UI | 1 天 |
-| 7–8 验证 / CI | 0.5–1 天 |
+| 阶段                   | 估计     |
+| ---------------------- | -------- |
+| 1–3 工程 / 打包 / 清单 | 0.5 天   |
+| 4 数据层               | 1 天     |
+| 5 图表 + 列表延迟      | 1.5 天   |
+| 6 UI                   | 1 天     |
+| 7–8 验证 / CI          | 0.5–1 天 |

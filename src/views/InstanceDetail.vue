@@ -13,10 +13,9 @@ import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import * as financeHelper from '@/utils/financeHelper'
 import { formatDateTime } from '@/utils/helper'
-import { getTrafficUsed } from '@/utils/nodeHelpers'
+import { getBillingCycleText, getDaysUntilExpiry, getExpireTextClass, getTrafficUsed } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
-import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
-import { getBillingCycleText, getExpireText, getExpireTextClass } from '@/utils/tagHelper'
+import { getFlagSrc, getRegionDisplayName, hasCountry } from '@/utils/regionHelper'
 
 const LoadChart = defineAsyncComponent(() => import('@/components/LoadChart.vue'))
 const PingChart = defineAsyncComponent(() => import('@/components/PingChart.vue'))
@@ -31,6 +30,8 @@ const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 const exchangeRates = ref(financeHelper.DEFAULT_EXCHANGE_RATES)
 const financeBaseCurrency = ref<CurrencyCode>('CNY')
 
+const nodeId = computed(() => Number(route.params.id))
+
 onMounted(async () => {
   window.scrollTo({ top: 0, behavior: 'instant' })
   financeBaseCurrency.value = financeHelper.getStoredFinanceCurrency()
@@ -39,7 +40,7 @@ onMounted(async () => {
   exchangeRates.value = rates
 })
 
-const data = computed(() => nodesStore.nodes.find(node => node.uuid === route.params.id))
+const data = computed(() => nodesStore.nodeById(nodeId.value))
 
 interface InfoItem {
   label: string
@@ -55,7 +56,6 @@ interface MetricCard {
   valueClass?: string
 }
 
-const EXPIRES_IN_SUFFIX_REGEX = /^(\d+)\s*(天|days?)$/i
 const CURRENCY_SUFFIX_REGEX = /^(\S.*\S)\s+([A-Z]{3})$/
 
 function formatFinanceMetricValue(amountCNY: number, currency: CurrencyCode): string {
@@ -70,14 +70,6 @@ function splitMetricValue(value: string): { value: string, unit?: string } {
     return {
       value: value.slice(0, cycleIndex),
       unit: value.slice(cycleIndex),
-    }
-  }
-
-  const expiresInMatch = value.match(EXPIRES_IN_SUFFIX_REGEX)
-  if (expiresInMatch) {
-    return {
-      value: expiresInMatch[1] ?? value,
-      unit: expiresInMatch[2] ?? undefined,
     }
   }
 
@@ -107,7 +99,8 @@ const monthlyAverageCostText = computed(() => {
   if (!data.value)
     return '-'
 
-  if (Number(data.value.billing_cycle) <= 0)
+  // 买断没有月均的概念
+  if ((financeHelper.BILLING_CYCLE_DAYS[data.value.billing_cycle] ?? 0) <= 0)
     return appStore.lang === 'zh-CN' ? '不适用' : 'N/A'
 
   const monthlyAverageCost = financeHelper.calculateMonthlyAverageCostCNY(data.value, exchangeRates.value)
@@ -115,10 +108,14 @@ const monthlyAverageCostText = computed(() => {
 })
 
 const remainingTimeText = computed(() => {
-  if (!data.value?.expired_at)
+  const days = data.value ? getDaysUntilExpiry(data.value) : null
+  if (days === null)
     return '-'
-
-  return getExpireText(data.value.expired_at, appStore.lang)
+  if (days > 36_500)
+    return '长期'
+  if (days >= 0)
+    return `${days} 天`
+  return appStore.lang === 'zh-CN' ? `已过期 ${-days} 天` : `Expired ${-days}d`
 })
 
 const remainingValueText = computed(() => {
@@ -130,10 +127,10 @@ const remainingValueText = computed(() => {
 })
 
 const remainingTimeValueClass = computed(() => {
-  if (!data.value?.expired_at)
+  if (!data.value)
     return ''
 
-  return getExpireTextClass(data.value.expired_at)
+  return getExpireTextClass(data.value)
 })
 
 const metricCards = computed<MetricCard[]>(() => {
@@ -177,15 +174,14 @@ const metricCards = computed<MetricCard[]>(() => {
 const hardwareInfo = computed<InfoItem[]>(() => [
   { label: 'CPU', value: data.value ? `${data.value.cpu_name} (x${data.value.cpu_cores})` : '-', icon: 'icon-park-outline:cpu' },
   { label: '架构', value: data.value?.arch ?? '-', icon: 'icon-park-outline:application-two' },
-  { label: '虚拟化', value: data.value?.virtualization ?? '-', icon: 'icon-park-outline:server' },
-  { label: 'GPU', value: data.value?.gpu_name || '-', icon: 'icon-park-outline:video-one' },
+  { label: '虚拟化', value: data.value?.virt ?? '-', icon: 'icon-park-outline:server' },
 ])
 
 const systemInfo = computed<InfoItem[]>(() => [
   { label: '操作系统', value: data.value?.os ?? '-', icon: 'icon-park-outline:computer' },
-  { label: '内核版本', value: data.value?.kernel_version ?? '-', icon: 'icon-park-outline:code' },
-  { label: '运行时间', value: formatUptime(data.value?.uptime ?? 0, 'minute'), icon: 'icon-park-outline:timer' },
-  { label: '最后上报', value: formatDateTime(data.value?.time), icon: 'icon-park-outline:time' },
+  { label: '内核版本', value: data.value?.kernel ?? '-', icon: 'icon-park-outline:code' },
+  { label: '运行时间', value: formatUptime(data.value?.metrics?.uptime ?? 0, 'minute'), icon: 'icon-park-outline:timer' },
+  { label: '最后上报', value: data.value?.last_seen ? formatDateTime(new Date(data.value.last_seen * 1000)) : '-', icon: 'icon-park-outline:time' },
 ])
 
 const storageInfo = computed<InfoItem[]>(() => [
@@ -220,6 +216,15 @@ const trafficUsageText = computed(() => {
 const trafficProgressStyle = computed(() => ({
   width: `${trafficUsedPercentage.value}%`,
 }))
+
+/** 账期描述：起始日 + 重置日 */
+const billingPeriodText = computed(() => {
+  const node = data.value
+  if (!node)
+    return '-'
+  const resetDay = node.traffic_reset_day > 0 ? `每月 ${node.traffic_reset_day} 日重置` : '按自然月重置'
+  return `${node.month_start || '-'} 起 · ${resetDay}`
+})
 </script>
 
 <template>
@@ -246,7 +251,7 @@ const trafficProgressStyle = computed(() => ({
         </Button>
         <div class="text-lg font-bold flex gap-2 items-center">
           <img
-            :src="getFlagSrc(data.region)" :alt="getRegionDisplayName(data.region)"
+            v-if="hasCountry(data.country)" :src="getFlagSrc(data.country)" :alt="getRegionDisplayName(data.country)"
             class="size-6"
           >
           <span>{{ data.name }}</span>
@@ -368,10 +373,11 @@ const trafficProgressStyle = computed(() => ({
               <div class="relative flex flex-col gap-1.5">
                 <div class="flex gap-1 items-center text-muted-foreground">
                   <Icon icon="icon-park-outline:transfer-data" :width="14" :height="14" />
-                  <span class="text-xs sm:text-sm">总流量</span>
+                  <span class="text-xs sm:text-sm">本账期流量</span>
                   <div class="flex-1" />
-                  <span class="hidden sm:block text-[11px] font-medium text-foreground/70">{{
-                    formatBytes(data?.net_total_up ?? 0) }} / {{ formatBytes(data?.net_total_down ?? 0) }}</span>
+                  <span class="hidden sm:block text-[11px] font-medium text-foreground/70">
+                    ↑ {{ formatBytes(data.month_tx) }} / ↓ {{ formatBytes(data.month_rx) }}
+                  </span>
                 </div>
                 <span class="text-xs sm:text-sm break-all">
                   {{ trafficUsageText }}
@@ -385,18 +391,40 @@ const trafficProgressStyle = computed(() => ({
               </div>
               <span class="text-xs sm:text-sm break-all flex flex-row flex-wrap items-center gap-1">
                 <Icon icon="tabler:chevron-up" width="12" height="12" />
-                {{ formatBytesPerSecond(data?.net_out ?? 0) }}
+                {{ formatBytesPerSecond(data.metrics?.net_tx ?? 0) }}
                 <span class="px-0.5" />
                 <Icon icon="tabler:chevron-down" width="12" height="12" />
-                {{ formatBytesPerSecond(data?.net_in ?? 0) }}
+                {{ formatBytesPerSecond(data.metrics?.net_rx ?? 0) }}
+              </span>
+            </div>
+            <div class="min-w-0 flex flex-col gap-1 rounded-sm bg-slate-500/5 p-2">
+              <div class="flex gap-1 items-center text-muted-foreground">
+                <Icon icon="icon-park-outline:calendar" :width="14" :height="14" />
+                <span class="text-xs sm:text-sm">今日流量</span>
+              </div>
+              <span class="text-xs sm:text-sm break-all flex flex-row flex-wrap items-center gap-1">
+                <Icon icon="tabler:chevron-up" width="12" height="12" />
+                {{ formatBytes(data.day_tx) }}
+                <span class="px-0.5" />
+                <Icon icon="tabler:chevron-down" width="12" height="12" />
+                {{ formatBytes(data.day_rx) }}
+              </span>
+            </div>
+            <div class="min-w-0 flex flex-col gap-1 rounded-sm bg-slate-500/5 p-2">
+              <div class="flex gap-1 items-center text-muted-foreground">
+                <Icon icon="icon-park-outline:history" :width="14" :height="14" />
+                <span class="text-xs sm:text-sm">账期起始</span>
+              </div>
+              <span class="text-xs sm:text-sm break-all">
+                {{ billingPeriodText }}
               </span>
             </div>
           </div>
         </CardX>
       </div>
 
-      <LoadChart :uuid="data.uuid" class="px-4" />
-      <PingChart :uuid="data.uuid" class="px-4" />
+      <LoadChart :node-id="data.id" class="px-4" />
+      <PingChart :node-id="data.id" class="px-4" />
     </template>
   </div>
 </template>

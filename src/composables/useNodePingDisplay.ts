@@ -7,7 +7,7 @@ import { formatDateTime } from '@/utils/helper'
 
 export type NodePingMetric = 'latency' | 'loss'
 
-// getRecords 在新版主控中返回的是近期可用样本，不保证覆盖完整 1 小时。
+// 列表 / 卡片展示固定取近一小时
 const RECENT_PING_RECORDS_QUERY_HOURS = 1
 
 // 三网延迟固定展示的记录数量
@@ -26,6 +26,7 @@ interface NodePingNetworkDisplay {
 }
 
 interface UseNodePingDisplayOptions {
+  /** 额外的开关（如视口可见性）；主题设置 listPingEnabled 始终参与 */
   enabled?: MaybeRefOrGetter<boolean>
   loadingDisplayText?: string
   emptyDisplayText?: string
@@ -80,20 +81,19 @@ function toNetworkDisplay(stat: NodePingPerTaskStat): NodePingNetworkDisplay {
 }
 
 export function useNodePingDisplay(
-  uuid: MaybeRefOrGetter<string>,
+  nodeId: MaybeRefOrGetter<number | null | undefined>,
   options: UseNodePingDisplayOptions = {},
 ) {
   const appStore = useAppStore()
-  // Komari 1.2.6+ uses metric-store retention and keeps the legacy public
-  // record fields for compatibility only. They can report records as disabled
-  // even when ping metrics are available, so only an explicit caller option
-  // should prevent the query.
-  const pingStatsEnabled = computed(() => options.enabled === undefined || toValue(options.enabled))
+
+  // 主题设置关闭列表延迟时完全不请求；调用方还可以追加视口可见性等条件
+  const pingStatsEnabled = computed(() =>
+    appStore.listPingEnabled && (options.enabled === undefined || toValue(options.enabled)),
+  )
 
   const pingRecordsQueryHours = computed(() => RECENT_PING_RECORDS_QUERY_HOURS)
 
-  const pingStats = useNodePingStats(uuid, {
-    hours: pingRecordsQueryHours,
+  const pingStats = useNodePingStats(nodeId, {
     enabled: pingStatsEnabled,
   })
 
@@ -127,7 +127,7 @@ export function useNodePingDisplay(
       : pingStats.error.value
         ? '加载失败'
         : !pingStatsEnabled.value
-            ? '未启用记录'
+            ? '未启用'
             : metric === 'latency'
               ? 'N/A'
               : 'N/A'
@@ -186,7 +186,7 @@ export function useNodePingDisplay(
     const perTaskStats = pingStats.perTaskStats.value
     const configuredNames = appStore.pingNetworkOrder
 
-    // 未配置自定义顺序时保持默认行为：按 taskId 顺序取前 3 条
+    // 未配置自定义顺序时保持默认行为：按后台探测顺序取前 3 条
     if (!configuredNames.length)
       return perTaskStats.slice(0, PING_NETWORK_DISPLAY_COUNT).map(toNetworkDisplay)
 
@@ -194,7 +194,7 @@ export function useNodePingDisplay(
     const selected: NodePingPerTaskStat[] = []
     const usedTaskIds = new Set<number>()
 
-    // 按配置顺序精确匹配节点名称，最多取 3 条
+    // 按配置顺序精确匹配探测名称，最多取 3 条
     for (const name of configuredNames) {
       if (selected.length >= PING_NETWORK_DISPLAY_COUNT)
         break
@@ -205,7 +205,7 @@ export function useNodePingDisplay(
       }
     }
 
-    // 不足 3 条时用剩余任务（taskId 升序）补位
+    // 不足 3 条时用剩余任务（后台顺序）补位
     for (const stat of perTaskStats) {
       if (selected.length >= PING_NETWORK_DISPLAY_COUNT)
         break

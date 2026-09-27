@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { NodeData } from '@/stores/nodes'
+import type { Node } from '@/api/types'
 import { Icon } from '@iconify/vue'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, ref, watch } from 'vue'
@@ -14,7 +14,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
-import { isNodeInGroup, parseNodeGroups } from '@/utils/groupHelper'
 import { isRegionMatch } from '@/utils/regionHelper'
 
 defineOptions({ name: 'HomeView' })
@@ -46,7 +45,7 @@ onDeactivated(() => {
 
 const searchText = ref('')
 const debouncedSearchText = ref('')
-const selectedPingNodeUuid = ref<string | null>(null)
+const selectedPingNodeId = ref<number | null>(null)
 
 const updateDebouncedSearch = useDebounceFn((value: string) => {
   debouncedSearchText.value = value
@@ -72,31 +71,32 @@ watch(
   { immediate: true },
 )
 
-function isNodeMatchSearch(node: typeof nodesStore.nodes[number], search: string): boolean {
+/** 搜索：名称、分组、国家、OS（计划 §6.3） */
+function isNodeMatchSearch(node: Node, search: string): boolean {
   if (!search.trim())
     return true
   const lowerSearch = search.toLowerCase().trim()
   if (node.name.toLowerCase().includes(lowerSearch))
     return true
-  if (node.region && isRegionMatch(node.region, search))
+  if (node.country && isRegionMatch(node.country, search))
     return true
   if (node.os && node.os.toLowerCase().includes(lowerSearch))
     return true
-  if (parseNodeGroups(node.group).some(group => group.toLowerCase().includes(lowerSearch)))
-    return true
-  if (node.tags && node.tags.toLowerCase().includes(lowerSearch))
-    return true
-  if (node.remark && node.remark.toLowerCase().includes(lowerSearch))
+  if ((node.group ?? '').toLowerCase().includes(lowerSearch))
     return true
   return false
 }
 
+function isNodeInGroup(node: Node, selectedGroup: string): boolean {
+  return selectedGroup === 'all' || (node.group ?? '') === selectedGroup
+}
+
 const groupNodeList = computed(() => {
-  return nodesStore.nodes.filter(node => isNodeInGroup(node.group, appStore.nodeSelectedGroup))
+  return nodesStore.nodes.filter(node => isNodeInGroup(node, appStore.nodeSelectedGroup))
 })
 
 const sampledGroupNodeList = computed(() => {
-  return nodesStore.earthNodes.filter(node => isNodeInGroup(node.group, appStore.nodeSelectedGroup))
+  return nodesStore.earthNodes.filter(node => isNodeInGroup(node, appStore.nodeSelectedGroup))
 })
 
 const nodeList = computed(() => {
@@ -111,29 +111,29 @@ const nodeList = computed(() => {
 })
 
 const selectedPingNode = computed(() => {
-  if (!selectedPingNodeUuid.value)
+  if (selectedPingNodeId.value === null)
     return null
-  return nodesStore.nodes.find(node => node.uuid === selectedPingNodeUuid.value) ?? null
+  return nodesStore.nodeById(selectedPingNodeId.value) ?? null
 })
 
 const pingDialogOpen = computed({
   get: () => selectedPingNode.value !== null,
   set: (open: boolean) => {
     if (!open)
-      selectedPingNodeUuid.value = null
+      selectedPingNodeId.value = null
   },
 })
 
-function handleNodeClick(node: typeof nodesStore.nodes[number]) {
-  router.push({ name: 'instance-detail', params: { id: node.uuid } })
+function handleNodeClick(node: Node) {
+  router.push({ name: 'node-detail', params: { id: String(node.id) } })
 }
 
-function handlePingClick(node: NodeData) {
-  selectedPingNodeUuid.value = node.uuid
+function handlePingClick(node: Node) {
+  selectedPingNodeId.value = node.id
 }
 
-function getNodeItemTransitionKey(node: typeof nodesStore.nodes[number]): string {
-  return `${appStore.nodeSelectedGroup}-${node.uuid}`
+function getNodeItemTransitionKey(node: Node): string {
+  return `${appStore.nodeSelectedGroup}-${node.id}`
 }
 
 function getNodeItemTransitionStyle(index: number): Record<string, string> {
@@ -145,13 +145,20 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
 
 <template>
   <div class="home-view">
-    <div v-if="appStore.connectionError" class="alert px-4">
+    <div v-if="nodesStore.closed" class="alert px-4">
+      <Alert :class="pickSurfaceClass('border-none bg-background rounded-md', 'border-none bg-background/60 backdrop-blur-xs rounded-md')">
+        <AlertTitle>页面暂未公开</AlertTitle>
+        <AlertDescription>站点管理员关闭了公开页面，登录后可以继续查看。</AlertDescription>
+      </Alert>
+    </div>
+
+    <div v-else-if="nodesStore.error" class="alert px-4">
       <Alert
         variant="destructive"
         :class="pickSurfaceClass('border-none bg-red-400/10 rounded-md', 'border-none bg-red-400/10 backdrop-blur-xs rounded-md')"
       >
-        <AlertTitle>RPC 服务错误</AlertTitle>
-        <AlertDescription>连接服务器失败，请检查网络设置或刷新页面后再试。</AlertDescription>
+        <AlertTitle>连接错误</AlertTitle>
+        <AlertDescription>{{ nodesStore.error }}</AlertDescription>
       </Alert>
     </div>
 
@@ -245,7 +252,8 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
               @ping-click="handlePingClick"
             />
             <div v-else class="text-muted-foreground text-center py-8">
-              <Empty description="暂无节点" />
+              <Empty v-if="nodesStore.closed" description="站点暂未对外展示节点" />
+              <Empty v-else :description="nodesStore.loaded ? '暂无节点' : '正在获取节点…'" />
             </div>
           </TabsContent>
         </Tabs>
@@ -291,7 +299,7 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
           </div>
         </DialogHeader>
         <div class="max-h-[calc(90vh-4rem)] overflow-y-auto p-4 pt-0">
-          <PingChart :uuid="selectedPingNode.uuid" />
+          <PingChart :node-id="selectedPingNode.id" />
         </div>
       </DialogContent>
     </Dialog>

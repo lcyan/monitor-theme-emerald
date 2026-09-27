@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { NodeData } from '@/stores/nodes'
+import type { Node } from '@/api/types'
 import type { CurrencyCode } from '@/utils/financeHelper'
 import { Icon } from '@iconify/vue'
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
@@ -13,8 +13,8 @@ import * as financeHelper from '@/utils/financeHelper'
 import { formatBytesPerSecondSplit, formatBytesSplit } from '@/utils/helper'
 
 const props = defineProps<{
-  nodes?: NodeData[]
-  globeNodes?: NodeData[]
+  nodes?: Node[]
+  globeNodes?: Node[]
   transitionKey?: string
 }>()
 
@@ -25,7 +25,6 @@ const { pickSurfaceClass } = useBackgroundSurface()
 const nodesStore = useNodesStore()
 const exchangeRates = ref(financeHelper.DEFAULT_EXCHANGE_RATES)
 const exchangeRateBaseCurrency = ref<CurrencyCode>('CNY')
-const excludeFreeNodes = ref(true)
 const financeRateCurrencies: readonly CurrencyCode[] = financeHelper.DISPLAY_FINANCE_CURRENCIES
 const summaryNodes = computed(() => props.nodes ?? nodesStore.nodes)
 const summaryTransitionKey = computed(() => props.transitionKey ?? 'all')
@@ -51,14 +50,14 @@ function setExchangeRateBaseCurrency(event: Event): void {
 
 const totalSpeed = computed(() => {
   const onlineNodes = summaryNodes.value.filter(node => node.online)
-  const up = onlineNodes.reduce((sum, node) => sum + (node.net_out || 0), 0)
-  const down = onlineNodes.reduce((sum, node) => sum + (node.net_in || 0), 0)
+  const up = onlineNodes.reduce((sum, node) => sum + (node.metrics?.net_tx ?? 0), 0)
+  const down = onlineNodes.reduce((sum, node) => sum + (node.metrics?.net_rx ?? 0), 0)
   return { up, down }
 })
 
 const totalTraffic = computed(() => {
-  const up = summaryNodes.value.reduce((sum, node) => sum + (node.net_total_up || 0), 0)
-  const down = summaryNodes.value.reduce((sum, node) => sum + (node.net_total_down || 0), 0)
+  const up = summaryNodes.value.reduce((sum, node) => sum + (node.total_tx || 0), 0)
+  const down = summaryNodes.value.reduce((sum, node) => sum + (node.total_rx || 0), 0)
   return { up, down }
 })
 
@@ -70,12 +69,12 @@ const formattedSpeedUp = computed(() => formatBytesPerSecondSplit(totalSpeed.val
 const formattedSpeedDown = computed(() => formatBytesPerSecondSplit(totalSpeed.value.down, appStore.byteDecimals))
 
 // ==================== 内存 / 硬盘 汇总 ====================
-// 离线节点的 ram / disk 为 0，不影响 used 求和；mem_total / disk_total 是静态库存信息，按全量统计
+// 离线节点的 metrics 为 null 不计入 used；mem_total / disk_total 是静态库存信息，按全量统计
 const totalMemory = computed(() => {
   let used = 0
   let total = 0
   for (const node of summaryNodes.value) {
-    used += node.ram || 0
+    used += node.metrics?.mem_used ?? 0
     total += node.mem_total || 0
   }
   return { used, total }
@@ -85,7 +84,7 @@ const totalDisk = computed(() => {
   let used = 0
   let total = 0
   for (const node of summaryNodes.value) {
-    used += node.disk || 0
+    used += node.metrics?.disk_used ?? 0
     total += node.disk_total || 0
   }
   return { used, total }
@@ -97,7 +96,7 @@ const formattedDiskUsed = computed(() => formatBytesSplit(totalDisk.value.used, 
 const formattedDiskTotal = computed(() => formatBytesSplit(totalDisk.value.total, appStore.byteDecimals))
 
 const remainingValueCNY = computed(() => {
-  return financeHelper.calculateTotalRemainingValueCNY(summaryNodes.value, exchangeRates.value, excludeFreeNodes.value)
+  return financeHelper.calculateTotalRemainingValueCNY(summaryNodes.value, exchangeRates.value)
 })
 const targetExchangeRate = computed(() => exchangeRates.value[exchangeRateBaseCurrency.value] || 1)
 const remainingValue = computed(() => {
@@ -107,7 +106,7 @@ const formattedRemainingValue = computed(() => {
   return financeHelper.formatFinanceAmount(remainingValue.value, exchangeRateBaseCurrency.value)
 })
 const totalValueCNY = computed(() => {
-  return financeHelper.calculateTotalValueCNY(summaryNodes.value, exchangeRates.value, excludeFreeNodes.value)
+  return financeHelper.calculateTotalValueCNY(summaryNodes.value, exchangeRates.value)
 })
 const totalValue = computed(() => {
   return totalValueCNY.value * targetExchangeRate.value
@@ -116,7 +115,7 @@ const formattedTotalValue = computed(() => {
   return financeHelper.formatFinanceAmount(totalValue.value, exchangeRateBaseCurrency.value)
 })
 const monthlyAverageCostCNY = computed(() => {
-  return financeHelper.calculateTotalMonthlyAverageCostCNY(summaryNodes.value, exchangeRates.value, excludeFreeNodes.value)
+  return financeHelper.calculateTotalMonthlyAverageCostCNY(summaryNodes.value, exchangeRates.value)
 })
 const monthlyAverageCost = computed(() => {
   return monthlyAverageCostCNY.value * targetExchangeRate.value
@@ -175,7 +174,6 @@ const cardGridClass = computed(() => showVisualPanel.value
 
 onMounted(async () => {
   exchangeRateBaseCurrency.value = financeHelper.getStoredFinanceCurrency()
-  excludeFreeNodes.value = financeHelper.shouldExcludeFreeNodes()
 
   const { rates } = await financeHelper.getDailyExchangeRates()
   exchangeRates.value = rates

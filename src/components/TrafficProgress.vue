@@ -1,13 +1,10 @@
 <script setup lang="ts">
+import type { Node } from '@/api/types'
 import { computed } from 'vue'
 import { formatBytes } from '@/utils/helper'
-import { calculateTrafficUsed } from '@/utils/nodeHelpers'
 
 export interface TrafficProgressProps {
-  upload: number
-  download: number
-  trafficLimit: number
-  trafficLimitType: 'up' | 'down' | 'min' | 'max' | 'sum'
+  node: Node
   uploadColor?: string
   downloadColor?: string
   singleColor?: string
@@ -23,29 +20,34 @@ const props = withDefaults(defineProps<TrafficProgressProps>(), {
   showIndicator: false,
 })
 
-const showProgress = computed(() => props.trafficLimit > 0)
+const showProgress = computed(() => props.node.traffic_limit > 0)
 
-const usedTraffic = computed(() => calculateTrafficUsed(props.upload, props.download, props.trafficLimitType))
+/** hub 已按 traffic_mode 折算好 month_used；旧版 hub 缺省时按双向求和 */
+const usedTraffic = computed(() => props.node.month_used ?? (props.node.month_rx + props.node.month_tx))
 
 const totalPercentage = computed(() => {
-  if (props.trafficLimit <= 0)
+  if (props.node.traffic_limit <= 0)
     return 0
-  return Math.min((usedTraffic.value / props.trafficLimit) * 100, 100)
+  return Math.min((usedTraffic.value / props.node.traffic_limit) * 100, 100)
 })
 
+/** up 计上行（tx），down 计下行（rx） */
 const uploadPercentage = computed(() => {
-  if (props.trafficLimit <= 0)
+  if (props.node.traffic_limit <= 0)
     return 0
-  return Math.min((props.upload / props.trafficLimit) * 100, 100)
+  return Math.min((props.node.month_tx / props.node.traffic_limit) * 100, 100)
 })
 
 const downloadPercentage = computed(() => {
-  if (props.trafficLimit <= 0)
+  if (props.node.traffic_limit <= 0)
     return 0
-  return Math.min((props.download / props.trafficLimit) * 100, 100)
+  return Math.min((props.node.month_rx / props.node.traffic_limit) * 100, 100)
 })
 
-const isDualColorMode = computed(() => props.trafficLimitType === 'sum')
+/** sum 与 max 以双向两条呈现；up/down 只画对应方向的单一进度 */
+const isDualColorMode = computed(() => props.node.traffic_mode !== 'up' && props.node.traffic_mode !== 'down')
+
+const singlePercentage = computed(() => (props.node.traffic_mode === 'up' ? uploadPercentage.value : downloadPercentage.value))
 
 const progressHeight = computed(() => {
   if (props.height === undefined)
@@ -67,14 +69,14 @@ const progressHeight = computed(() => {
     <div v-else class="traffic-progress__rail bg-muted" :style="{ height: progressHeight }">
       <div
         class="traffic-progress__fill traffic-progress__fill--last bg-green-600"
-        :style="{ width: `${totalPercentage}%` }"
+        :style="{ width: `${singlePercentage}%` }"
       />
     </div>
 
     <div v-if="showIndicator && showProgress" class="traffic-progress__indicator">
       <span>{{ totalPercentage.toFixed(1) }}%</span>
       <span class="traffic-progress__indicator-detail">
-        {{ formatBytes(usedTraffic) }} / {{ formatBytes(trafficLimit) }}
+        {{ formatBytes(usedTraffic) }} / {{ formatBytes(props.node.traffic_limit) }}
       </span>
     </div>
   </div>
