@@ -4,7 +4,7 @@ import { api, ApiError } from './client'
 /**
  * 历史查询的统一入口。hub 全局只放行 4 个并发历史窗口，超出的直接 503——
  * 负载图、延迟图、列表三网延迟若各自请求，几十个节点的页面必然打爆它。
- * 这里串成一条队：客户端同时在飞的请求不超过 2 个；吃到 503 就让出队列位
+ * 这里串成一条队：客户端同时在飞的请求不超过 3 个；吃到 503 就让出队列位
  * 指数退避；同参数的请求去重并按 TTL 缓存。
  */
 
@@ -15,7 +15,7 @@ export interface HistoryQuery {
   series?: 'metrics' | 'ping'
 }
 
-const MAX_CONCURRENT = 2
+const MAX_CONCURRENT = 3
 const RETRY_MAX = 4
 const BASE_DELAY_MS = 500
 const DEFAULT_TTL_MS = 60_000
