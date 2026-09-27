@@ -19,6 +19,7 @@ export interface ThemeSettings {
   alertTitle: string
   alertContent: string
   earthViewMode: 'earth' | 'earth-stop' | 'maps' | 'cards' | 'hide'
+  chartTimeRanges: string
   visitorInfoCardEnabled: boolean
   hideAdminEntryWhenLoggedOut: boolean
   disablePageAnimation: boolean
@@ -89,6 +90,7 @@ export function defaultSettings(): ThemeSettings {
     alertTitle: '',
     alertContent: '',
     earthViewMode: 'earth',
+    chartTimeRanges: '1,6,24,168,720,2160',
     visitorInfoCardEnabled: true,
     hideAdminEntryWhenLoggedOut: false,
     disablePageAnimation: false,

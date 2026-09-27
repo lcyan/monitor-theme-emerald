@@ -77,25 +77,21 @@ const baseTooltipConfig = computed(() => ({
 const chartMargin = { top: 30, right: 24, bottom: 32, left: 56 }
 const chartMarginWithLegend = { top: 30, right: 24, bottom: 52, left: 56 }
 
-// 历史窗口：hub 匿名上限 168h，登录 2160h
-const presetViews = [
-  { label: '1 小时', hours: 1 },
-  { label: '6 小时', hours: 6 },
-  { label: '1 天', hours: 24 },
-  { label: '7 天', hours: 168 },
-  ...(appStore.authed
-    ? [
-        { label: '30 天', hours: 720 },
-        { label: '90 天', hours: 2160 },
-      ]
-    : []),
-]
-
-const availableViews = computed<{ label: string, hours?: number }[]>(() => [{ label: '实时' }, ...presetViews])
+// 时间档位来自后台设置 chartTimeRanges；超出 168h 的档位仅登录可见（hub 匿名上限 168h）
+const availableViews = computed<{ label: string, hours?: number }[]>(() => [
+  { label: '实时' },
+  ...appStore.chartTimeRanges.filter(range => range.hours <= 168 || appStore.authed),
+])
 
 const selectedView = ref('实时')
 const selectedHours = computed(() => availableViews.value.find(v => v.label === selectedView.value)?.hours)
 const isRealtime = computed(() => selectedView.value === '实时')
+
+// 后台改档位后，当前选中项可能已不存在，回落到第一个可用档位
+watch(availableViews, (views) => {
+  if (!views.some(v => v.label === selectedView.value))
+    selectedView.value = views[0]!.label
+})
 
 // ==================== 数据状态 ====================
 

@@ -20,6 +20,7 @@
     { "key": "visitorInfoCardEnabled", "type": "boolean", "label": "访客信息卡片", "default": true, "help": "显示访客来源、设备和浏览器信息。访客 IP 归属由第三方接口查询" },
     { "key": "hideAdminEntryWhenLoggedOut", "type": "boolean", "label": "隐藏后台入口", "default": false, "help": "未登录时隐藏顶部后台管理入口" },
     { "key": "disablePageAnimation", "type": "boolean", "label": "减弱过渡动画", "default": false, "help": "减少页面过渡动画效果，提升访问速度和响应性" },
+    { "key": "chartTimeRanges", "type": "string", "label": "图表时间范围", "default": "1,6,24,168,720,2160", "help": "负载与延迟图的时间档位，逗号分隔的小时数：≤24 显示为小时，24 的倍数显示为天；超出 168 的档位仅登录可见。按后台「历史保留天数」取舍，如只保留 30 天可填 1,6,24,168,720" },
     { "type": "title", "label": "备案设置" },
     { "key": "icpEnabled", "type": "boolean", "label": "显示备案号", "default": false },
     { "key": "icpNumber", "type": "string", "label": "备案号", "default": "", "help": "如：京ICP备12345678号" },

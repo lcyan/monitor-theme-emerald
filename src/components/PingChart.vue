@@ -46,22 +46,17 @@ const chartColors = [
   '#FB923C', // 橙色
 ]
 
-// 与 hub 的窗口上限对齐：匿名 ≤168h，登录 ≤2160h（超出部分 hub 会静默 clamp）
-const presetViews = [
-  { label: '1 小时', hours: 1 },
-  { label: '6 小时', hours: 6 },
-  { label: '1 天', hours: 24 },
-  { label: '7 天', hours: 168 },
-  ...(appStore.authed
-    ? [
-        { label: '30 天', hours: 720 },
-        { label: '90 天', hours: 2160 },
-      ]
-    : []),
-]
+// 时间档位来自后台设置 chartTimeRanges；超出 168h 的档位仅登录可见（hub 匿名上限 168h）
+const presetViews = computed(() => appStore.chartTimeRanges.filter(range => range.hours <= 168 || appStore.authed))
 
 const selectedView = ref('')
-const selectedHours = computed(() => presetViews.find(v => v.label === selectedView.value)?.hours ?? 1)
+const selectedHours = computed(() => presetViews.value.find(v => v.label === selectedView.value)?.hours ?? 1)
+
+// 后台改档位后，当前选中项可能已不存在，回落到第一个可用档位
+watch(presetViews, (views) => {
+  if (views.length && !views.some(v => v.label === selectedView.value))
+    selectedView.value = views[0]!.label
+})
 
 // ==================== 数据状态 ====================
 
@@ -468,7 +463,7 @@ watch(() => props.nodeId, () => {
 
 onMounted(() => {
   if (!selectedView.value)
-    selectedView.value = presetViews[0]!.label
+    selectedView.value = presetViews.value[0]!.label
   fetchRecords()
 })
 </script>

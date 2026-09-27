@@ -1,11 +1,13 @@
 import type { ThemeSettings } from '@/api/config'
 import type { Me } from '@/api/types'
+import type { ChartTimeRange } from '@/utils/chartRanges'
 import type { ByteDecimalsConfig } from '@/utils/helper'
 import { usePreferredDark, useStorageAsync } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { defaultSettings, loadThemeSettings } from '@/api/config'
 import { fetchMe } from '@/api/me'
+import { parseChartRanges } from '@/utils/chartRanges'
 
 export type ThemeMode = 'auto' | 'light' | 'dark'
 export type NodeViewMode = 'card' | 'list'
@@ -103,6 +105,7 @@ const useAppStore = defineStore('app', () => {
   const alertContent = computed(() => settings.value.alertContent)
 
   const earthViewMode = computed<EarthViewMode>(() => settings.value.earthViewMode)
+  const chartTimeRanges = computed<ChartTimeRange[]>(() => parseChartRanges(settings.value.chartTimeRanges))
   const visitorInfoCardEnabled = computed(() => settings.value.visitorInfoCardEnabled)
   const hideAdminEntryWhenLoggedOut = computed(() => settings.value.hideAdminEntryWhenLoggedOut)
   const disablePageAnimation = computed(() => settings.value.disablePageAnimation)
@@ -176,6 +179,7 @@ const useAppStore = defineStore('app', () => {
     alertTitle,
     alertContent,
     earthViewMode,
+    chartTimeRanges,
     visitorInfoCardEnabled,
     visitorCountryCode,
     hideAdminEntryWhenLoggedOut,
