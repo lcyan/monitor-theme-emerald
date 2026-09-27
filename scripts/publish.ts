@@ -149,7 +149,8 @@ async function main(): Promise<void> {
 
   git(['commit', '-m', `release: ${tag}`])
   git(['tag', tag])
-  git(['push', 'origin', 'HEAD', '--follow-tags'])
+  // --follow-tags 只带附注标签；轻量标签必须显式推送，否则 release workflow 不会触发
+  git(['push', 'origin', 'HEAD', tag])
   console.log(`Pushed ${tag}; the release workflow will build and publish theme.tar.gz.`)
 }
 
