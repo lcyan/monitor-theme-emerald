@@ -46,8 +46,8 @@ const chartColors = [
   '#FB923C', // 橙色
 ]
 
-// 时间档位来自后台设置 chartTimeRanges；超出 168h 的档位仅登录可见（hub 匿名上限 168h）
-const presetViews = computed(() => appStore.chartTimeRanges.filter(range => range.hours <= 168 || appStore.authed))
+// 时间档位来自后台设置 chartTimeRanges，已按 /api/me 的 history_days 自动收窄
+const presetViews = computed(() => appStore.chartTimeRanges)
 
 const selectedView = ref('')
 const selectedHours = computed(() => presetViews.value.find(v => v.label === selectedView.value)?.hours ?? 1)
@@ -87,6 +87,15 @@ const chartMargin = { top: 30, right: 24, bottom: 52, left: 56 }
 
 // 与 hub 的分桶预算对齐
 const HISTORY_POINTS = 700
+
+const AMP_REGEX = /&/g
+const LT_REGEX = /</g
+const GT_REGEX = />/g
+
+/** 探测名是站长配置的字符串，拼进 ECharts 的 HTML tooltip 前必须转义 */
+function escapeHtml(text: string): string {
+  return text.replace(AMP_REGEX, '&amp;').replace(LT_REGEX, '&lt;').replace(GT_REGEX, '&gt;')
+}
 
 // 探测按行首次出现顺序（hub 已按后台顺序排好行）
 const tasks = computed<TaskInfo[]>(() => {
@@ -391,7 +400,7 @@ const pingChartOption = computed(() => {
           const band = point.bands[task.id]
           const bandText = band ? ` <span style="opacity:.6">(${band[0]}–${band[1]})</span>` : ''
           const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:8px;flex-shrink:0"></span>`
-          html += `<div style="display:flex;align-items:center">${colorDot}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.seriesName}</span><span style="margin-left:auto;font-weight:600;margin-left:16px;font-variant-numeric:tabular-nums">${item.value === null || item.value === undefined ? '超时' : `${Math.round(item.value)} ms${bandText}`}</span></div>`
+          html += `<div style="display:flex;align-items:center">${colorDot}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(item.seriesName)}</span><span style="margin-left:auto;font-weight:600;margin-left:16px;font-variant-numeric:tabular-nums">${item.value === null || item.value === undefined ? '超时' : `${Math.round(item.value)} ms${bandText}`}</span></div>`
         }
         html += '</div>'
         return html

@@ -1,6 +1,6 @@
 import type { Node } from '@/api/types'
 import { describe, expect, it } from 'bun:test'
-import { BILLING_CYCLE_DAYS, calculateMonthlyAverageCostCNY, calculateRemainingValueCNY, DEFAULT_EXCHANGE_RATES } from '../financeHelper'
+import { BILLING_CYCLE_DAYS, billingCycleDays, calculateMonthlyAverageCostCNY, calculateRemainingValueCNY, DEFAULT_EXCHANGE_RATES } from '../financeHelper'
 
 function makeNode(overrides: Partial<Node> = {}): Node {
   return {
@@ -49,6 +49,26 @@ describe('BILLING_CYCLE_DAYS', () => {
     expect(BILLING_CYCLE_DAYS.biennial).toBe(730)
     expect(BILLING_CYCLE_DAYS.triennial).toBe(1095)
     expect(BILLING_CYCLE_DAYS.once).toBe(0)
+  })
+})
+
+describe('billingCycleDays', () => {
+  it('<n>m 形态按 n×30 天折算', () => {
+    expect(billingCycleDays('6m')).toBe(180)
+    expect(billingCycleDays('1m')).toBe(30)
+    expect(billingCycleDays('1200m')).toBe(36_000)
+  })
+
+  it('枚举与未知周期', () => {
+    expect(billingCycleDays('yearly')).toBe(365)
+    expect(billingCycleDays('once')).toBe(0)
+    expect(billingCycleDays('weekly')).toBe(0)
+    expect(billingCycleDays('m')).toBe(0)
+  })
+
+  it('6m 节点参与月均与剩余价值', () => {
+    expect(calculateMonthlyAverageCostCNY(makeNode({ billing_cycle: '6m' }), DEFAULT_EXCHANGE_RATES)).toBeCloseTo(100 / 6)
+    expect(calculateRemainingValueCNY(makeNode({ billing_cycle: '6m', expires_in: 90 }), DEFAULT_EXCHANGE_RATES)).toBeCloseTo(50)
   })
 })
 

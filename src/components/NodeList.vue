@@ -188,8 +188,10 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                   <span class="truncate">{{ node.name }}</span>
                 </div>
                 <div class="flex flex-row text-[11px] text-muted-foreground/70">
+                  <!-- 刚连上还没有第一帧数据：uptime 未知 -->
+                  <span v-if="node.online && !node.metrics" class="animate-pulse">等待数据</span>
                   <DataTooltip
-                    v-if="node.online && node.metrics" :content="formatUptime(node.metrics.uptime)" class="shrink-0" placement="right"
+                    v-else-if="node.online && node.metrics" :content="formatUptime(node.metrics.uptime)" class="shrink-0" placement="right"
                     content-class="whitespace-pre-wrap left-0 ml-0 w-max"
                   >
                     <span>

@@ -1,5 +1,5 @@
 import { registerMap } from 'echarts/core'
-import { fetchWithTimeout } from '@/utils/financeHelper'
+import { fetchWithTimeout } from '@/api/external'
 import { REGION_INFO } from '@/utils/regionHelper'
 
 type WorldGeoJson = Exclude<
@@ -7,7 +7,7 @@ type WorldGeoJson = Exclude<
   string | { geoJSON: unknown } | { svg: unknown }
 >
 
-const WORLD_MAP_NAME = 'komari-world'
+const WORLD_MAP_NAME = 'emerald-world'
 // 世界地图数据源：多 CDN 依次回退，避免单一 CDN 故障影响地图展示
 const WORLD_GEO_JSON_URLS = [
   'https://cdn.jsdelivr.net/gh/apache/echarts-www@master/asset/map/json/world.json',
@@ -15,8 +15,9 @@ const WORLD_GEO_JSON_URLS = [
   'https://gcore.jsdelivr.net/gh/apache/echarts-www@master/asset/map/json/world.json',
   'https://raw.githubusercontent.com/apache/echarts-www/master/asset/map/json/world.json',
 ]
-const WORLD_MAP_CACHE_KEY_PREFIX = 'komari-theme-emerald:world-map'
-const WORLD_MAP_CACHE_KEY = `${WORLD_MAP_CACHE_KEY_PREFIX}` // :${__BUILD_GIT_HASH__}
+const WORLD_MAP_CACHE_KEY = 'emerald:world-map:v2'
+/** 迁移前的缓存键，顺手清掉让位给新键 */
+const LEGACY_WORLD_MAP_CACHE_KEYS = ['komari-theme-emerald:world-map']
 
 const ECHARTS_WORLD_NAME_TO_CODE: Record<string, string> = {
   'aland': 'AX',
@@ -75,12 +76,8 @@ function pruneStaleWorldMapCache(): void {
     return
 
   try {
-    for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
-      const key = window.localStorage.key(index)
-      if (!key?.startsWith(WORLD_MAP_CACHE_KEY_PREFIX) || key === WORLD_MAP_CACHE_KEY)
-        continue
+    for (const key of LEGACY_WORLD_MAP_CACHE_KEYS)
       window.localStorage.removeItem(key)
-    }
   }
   catch {
   }

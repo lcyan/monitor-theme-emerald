@@ -1,4 +1,4 @@
-import type { MetricsResponse } from './types'
+import type { MetricRow, MetricsResponse, PingRow } from './types'
 import { api, ApiError } from './client'
 
 /**
@@ -43,6 +43,41 @@ function release(): void {
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
+/** 与 live.ts 的 safeNodes 同思路：一行坏数据不能把 NaN 带进图表，丢弃而非修整 */
+function safeMetricRows(rows: unknown): MetricRow[] {
+  const base = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
+  const optional = (r: Record<string, unknown>, key: string) => r[key] === undefined || base(r[key])
+  if (!Array.isArray(rows))
+    return []
+  return rows.filter((row): row is MetricRow => {
+    if (row === null || typeof row !== 'object')
+      return false
+    const r = row as Record<string, unknown>
+    return base(r.ts) && base(r.cpu) && base(r.mem_used) && base(r.disk_used)
+      && base(r.net_rx) && base(r.net_tx)
+      && optional(r, 'minutes') && optional(r, 'cpu_max')
+      && optional(r, 'net_rx_max') && optional(r, 'net_tx_max')
+  })
+}
+
+function safePingRows(rows: unknown): PingRow[] {
+  const base = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
+  if (!Array.isArray(rows))
+    return []
+  return rows.filter((row): row is PingRow => {
+    if (row === null || typeof row !== 'object')
+      return false
+    const r = row as Record<string, unknown>
+    return base(r.task_id) && base(r.ts)
+      && (r.latency === null || base(r.latency))
+      && (r.loss === undefined || base(r.loss))
+  })
+}
+
+function sanitize(response: MetricsResponse): MetricsResponse {
+  return { ...response, metrics: safeMetricRows(response.metrics), ping: safePingRows(response.ping) }
+}
+
 async function requestOnce(nodeId: number, query: HistoryQuery): Promise<MetricsResponse> {
   // 退避等待发生在队列之外：吃 503 的请求不该占着两个名额之一
   for (let attempt = 0; ; attempt++) {
@@ -53,7 +88,7 @@ async function requestOnce(nodeId: number, query: HistoryQuery): Promise<Metrics
         params.set('points', String(query.points))
       if (query.series !== undefined)
         params.set('series', query.series)
-      return await api<MetricsResponse>(`/nodes/${nodeId}/metrics?${params}`)
+      return sanitize(await api<MetricsResponse>(`/nodes/${nodeId}/metrics?${params}`))
     }
     catch (e) {
       if (e instanceof ApiError && e.status === 503 && attempt < RETRY_MAX - 1) {
@@ -91,9 +126,4 @@ export function fetchHistory(nodeId: number, query: HistoryQuery, ttlMs = DEFAUL
   }
   cache.set(key, entry)
   return entry.promise
-}
-
-/** 测试与登出等场景下清空缓存 */
-export function clearHistoryCache(): void {
-  cache.clear()
 }

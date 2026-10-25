@@ -54,11 +54,33 @@ export interface LiveOptions {
   reconnectMs?: number
 }
 
+/** ?gzip 的解压依赖 DecompressionStream；没有它的环境退回纯文本帧 */
+const canGzip = () => typeof DecompressionStream !== 'undefined'
+
 /**
- * 实时节点的唯一来源：先取一次 /api/nodes 让页面尽快有数据，随后连 /api/ws
- * （hub 每 2s 推一帧）。流断开后轮询接管，并持续尝试重连——hub 重启会断开
- * 每一条流，不重连的话，比部署活得久的页面会以 1/5 的速率默默轮询到永远；
- * WS 收到帧即停轮询。所有定时器只在这里持有，返回的 stop() 负责清场。
+ * 一帧可能是文本，也可能是 gzip 压缩的二进制（浏览器 WS 默认给 Blob，
+ * 也可能是 ArrayBuffer；非浏览器运行时会给 Uint8Array）。解不开或解出的
+ * 不是 JSON 都交给调用方按坏帧处理。
+ */
+async function decodeFrame(data: unknown): Promise<string> {
+  if (typeof data === 'string')
+    return data
+  const buffer = data instanceof ArrayBuffer
+    ? data
+    : data instanceof Uint8Array
+      ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+      : await (data as Blob).arrayBuffer()
+  const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))
+  return await new Response(stream).text()
+}
+
+/**
+ * 实时节点的唯一来源：先取一次 /api/nodes 让页面尽快有数据，随后连
+ * /api/ws?gzip（hub 每 2s 推一帧压缩快照）。流断开后轮询接管，并持续尝试
+ * 重连——hub 重启会断开每一条流，不重连的话，比部署活得久的页面会以 1/5
+ * 的速率默默轮询到永远；WS 收到帧即停轮询。标签页隐藏时断流停轮询，回
+ * 前台立即拉一次 /api/nodes 并重连。所有定时器只在这里持有，返回的
+ * stop() 负责清场。
  */
 export function startLive(handlers: LiveHandlers, options: LiveOptions = {}): LiveHandle {
   const pollMs = options.pollMs ?? POLL_MS
@@ -68,15 +90,52 @@ export function startLive(handlers: LiveHandlers, options: LiveOptions = {}): Li
   let retry: ReturnType<typeof setTimeout> | null = null
   let openTimer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
+  let hidden = false
 
-  const receive = (list: unknown) => {
+  function receive(list: unknown): void {
     if (stopped || !Array.isArray(list))
       return
     handlers.onNodes(safeNodes(list as Node[]))
     handlers.onError(null)
   }
 
-  const fetchOnce = () =>
+  /** 撤销 socket 上的回调再关闭，避免 onclose 把轮询/重连又拉起来 */
+  function dropSocket(): void {
+    if (!socket)
+      return
+    const s = socket
+    socket = null
+    s.onclose = null
+    s.onerror = null
+    s.onmessage = null
+    s.onopen = null
+    s.close()
+  }
+
+  function clearTimers(): void {
+    if (poll) {
+      clearInterval(poll)
+      poll = null
+    }
+    if (retry) {
+      clearTimeout(retry)
+      retry = null
+    }
+    if (openTimer) {
+      clearTimeout(openTimer)
+      openTimer = null
+    }
+  }
+
+  function stop(): void {
+    stopped = true
+    dropSocket()
+    clearTimers()
+    if (typeof document !== 'undefined')
+      document.removeEventListener('visibilitychange', onVisibility)
+  }
+
+  function fetchOnce(): void {
     api<NodesFrame>('/nodes')
       .then((frame) => {
         receive(frame.nodes)
@@ -86,19 +145,35 @@ export function startLive(handlers: LiveHandlers, options: LiveOptions = {}): Li
           return
         if (e instanceof ApiError && e.status === 401) {
           handlers.onClosed()
+          // 公开页已关：继续轮询与重连只会一遍遍吃 401
+          stop()
           return
         }
         handlers.onError(e instanceof Error ? e.message : String(e))
       })
+  }
 
-  const startPolling = () => {
+  function startPolling(): void {
     poll ??= setInterval(fetchOnce, pollMs)
   }
 
-  const connect = () => {
-    if (stopped || socket)
+  // 流回来了，轮询只是替班
+  function frameReceived(): void {
+    if (poll) {
+      clearInterval(poll)
+      poll = null
+    }
+    if (retry) {
+      clearTimeout(retry)
+      retry = null
+    }
+  }
+
+  function connect(): void {
+    if (stopped || hidden || socket)
       return
-    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws`
+    const gzip = canGzip() ? '?gzip' : ''
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws${gzip}`
     try {
       socket = new WebSocket(url)
     }
@@ -109,22 +184,19 @@ export function startLive(handlers: LiveHandlers, options: LiveOptions = {}): Li
       return
     }
     socket.onmessage = (event) => {
-      try {
-        receive((JSON.parse(event.data as string) as NodesFrame).nodes)
-      }
-      catch {
-        socket?.close()
-        return
-      }
-      // 流回来了，轮询只是替班
-      if (poll) {
-        clearInterval(poll)
-        poll = null
-      }
-      if (retry) {
-        clearTimeout(retry)
-        retry = null
-      }
+      const sender = socket
+      void decodeFrame(event.data)
+        .then((raw) => {
+          // 解压是异步的：等帧落地时连接可能已换人，旧连接的帧不算「流回来了」
+          if (socket !== sender)
+            return
+          receive((JSON.parse(raw) as NodesFrame).nodes)
+          frameReceived()
+        })
+        .catch(() => {
+          if (socket === sender)
+            sender?.close()
+        })
     }
     socket.onerror = () => socket?.close()
     // 连接建立即撤销看门狗；看门狗只负责 CONNECTING 卡死的情况
@@ -145,33 +217,33 @@ export function startLive(handlers: LiveHandlers, options: LiveOptions = {}): Li
         clearTimeout(openTimer)
         openTimer = null
       }
-      if (stopped)
+      if (stopped || hidden)
         return
       startPolling()
       retry = setTimeout(connect, reconnectMs)
     }
   }
 
+  function onVisibility(): void {
+    if (stopped)
+      return
+    if (document.hidden) {
+      hidden = true
+      dropSocket()
+      clearTimers()
+    }
+    else if (hidden) {
+      hidden = false
+      fetchOnce()
+      connect()
+    }
+  }
+
+  if (typeof document !== 'undefined')
+    document.addEventListener('visibilitychange', onVisibility)
+
   fetchOnce()
   connect()
 
-  return {
-    stop() {
-      stopped = true
-      socket?.close()
-      socket = null
-      if (poll) {
-        clearInterval(poll)
-        poll = null
-      }
-      if (retry) {
-        clearTimeout(retry)
-        retry = null
-      }
-      if (openTimer) {
-        clearTimeout(openTimer)
-        openTimer = null
-      }
-    },
-  }
+  return { stop }
 }

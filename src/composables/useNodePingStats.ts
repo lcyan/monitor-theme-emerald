@@ -6,7 +6,7 @@ import { fetchHistory } from '@/api/history'
 /**
  * 单节点近一小时 ping 概览，供列表 / 卡片的三网延迟条使用。
  *
- * 数据经 `fetchHistory` 的并发队列（客户端上限 2）与 60s TTL 缓存：同一节点
+ * 数据经 `fetchHistory` 的并发队列（客户端上限 3）与 60s TTL 缓存：同一节点
  * 的重复调用、多节点同时进视口的爆发请求，都会在队列与缓存处收敛。
  * 是否发起请求由调用方的 enabled 控制——列表用 IntersectionObserver 只对
  * 视口内节点取数。
@@ -37,6 +37,8 @@ export interface NodePingStatsState {
 
 export const NODE_PING_BAR_COUNT = 10
 const QUERY_HOURS = 1
+/** hub 的 points 参数下限 60，请求 60 行再在客户端切成展示桶 */
+const QUERY_POINTS = 60
 const FULL_LOSS_EPSILON = 1e-6
 
 function createEmptyStats(): NodePingStatsState {
@@ -194,7 +196,7 @@ export function useNodePingStats(
     error.value = null
     try {
       // 60s TTL 缓存在 fetchHistory 内部：可见性反复变化不会重复打 hub
-      const response = await fetchHistory(id, { hours: QUERY_HOURS, points: NODE_PING_BAR_COUNT, series: 'ping' })
+      const response = await fetchHistory(id, { hours: QUERY_HOURS, points: QUERY_POINTS, series: 'ping' })
       if (seq !== requestSeq)
         return
       stats.value = buildStats(response.ping, response.probes, response.loss)

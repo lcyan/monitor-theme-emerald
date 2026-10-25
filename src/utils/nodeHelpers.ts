@@ -59,7 +59,14 @@ const BILLING_CYCLE_TEXTS: Record<string, Record<'zh-CN' | 'en-US', string>> = {
   once: { 'zh-CN': '一次性', 'en-US': 'Once' },
 }
 
+const MONTHS_CYCLE_REGEX = /^(\d{1,4})m$/
+
 export function getBillingCycleText(billingCycle: BillingCycle | string, lang: 'zh-CN' | 'en-US' = 'zh-CN'): string {
+  const months = MONTHS_CYCLE_REGEX.exec(billingCycle)
+  if (months) {
+    const count = Number(months[1])
+    return lang === 'zh-CN' ? `${count} 个月` : `${count} Months`
+  }
   return BILLING_CYCLE_TEXTS[billingCycle]?.[lang] ?? String(billingCycle)
 }
 

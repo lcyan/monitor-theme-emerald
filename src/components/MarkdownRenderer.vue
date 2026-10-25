@@ -6,6 +6,19 @@ const props = defineProps<{
 }>()
 const IMAGE_REGEX = /^!\[([^\]]*)\]\(([^)]+)\)/
 const LINK_REGEX = /^\[([^\]]+)\]\(([^)]+)\)/
+/** 链接只放行 http/https/mailto，图片仅 http/https；其余按纯文本渲染 */
+const LINK_PROTOCOLS = ['http:', 'https:', 'mailto:']
+const IMAGE_PROTOCOLS = ['http:', 'https:']
+
+function isSafeUrl(url: string, protocols: string[]): boolean {
+  try {
+    return protocols.includes(new URL(url.trim()).protocol)
+  }
+  catch {
+    // 解析失败含相对路径与无协议写法，一律不放行
+    return false
+  }
+}
 const BOLD_ASTERISK_REGEX = /^\*\*([^*]+)\*\*/
 const BOLD_UNDERSCORE_REGEX = /^__([^_]+)__/
 const ITALIC_ASTERISK_REGEX = /^\*([^*]+)\*/
@@ -34,14 +47,20 @@ function parseMarkdown(text: string): Token[] {
   while (remaining.length > 0) {
     const imageMatch = remaining.match(IMAGE_REGEX)
     if (imageMatch) {
-      tokens.push({ type: 'image', alt: imageMatch[1], url: imageMatch[2] })
+      if (isSafeUrl(imageMatch[2]!, IMAGE_PROTOCOLS))
+        tokens.push({ type: 'image', alt: imageMatch[1], url: imageMatch[2]!.trim() })
+      else
+        tokens.push({ type: 'text', content: escapeHtml(imageMatch[0]) })
       remaining = remaining.slice(imageMatch[0].length)
       continue
     }
 
     const linkMatch = remaining.match(LINK_REGEX)
     if (linkMatch) {
-      tokens.push({ type: 'link', content: linkMatch[1], url: linkMatch[2] })
+      if (isSafeUrl(linkMatch[2]!, LINK_PROTOCOLS))
+        tokens.push({ type: 'link', content: linkMatch[1], url: linkMatch[2]!.trim() })
+      else
+        tokens.push({ type: 'text', content: escapeHtml(linkMatch[0]) })
       remaining = remaining.slice(linkMatch[0].length)
       continue
     }

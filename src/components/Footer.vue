@@ -13,6 +13,20 @@ const buildGitHash = __BUILD_GIT_HASH__
 const showIcp = computed(() => appStore.icpEnabled && appStore.icpNumber)
 const showPolice = computed(() => appStore.policeEnabled && appStore.policeNumber)
 const showFiling = computed(() => showIcp.value || showPolice.value)
+
+/** 站长填的跳转链接只放行 http(s)，其余按纯文本渲染 */
+function safeFilingUrl(url: string): string | null {
+  try {
+    const protocol = new URL(url.trim()).protocol
+    return protocol === 'http:' || protocol === 'https:' ? url.trim() : null
+  }
+  catch {
+    return null
+  }
+}
+
+const icpHref = computed(() => safeFilingUrl(appStore.icpUrl))
+const policeHref = computed(() => safeFilingUrl(appStore.policeUrl))
 </script>
 
 <template>
@@ -47,15 +61,16 @@ const showFiling = computed(() => showIcp.value || showPolice.value)
 
     <div v-if="showFiling" class="flex flex-wrap gap-2 items-center justify-center sm:flex-shrink-0 pb-7">
       <a
-        v-if="showIcp" :href="appStore.icpUrl" target="_blank" rel="noopener noreferrer"
+        v-if="showIcp && icpHref" :href="icpHref" target="_blank" rel="noopener noreferrer"
         class="transition-opacity hover:opacity-70"
       >
         <span class="text-xs text-muted-foreground">{{ appStore.icpNumber || '' }}</span>
       </a>
+      <span v-else-if="showIcp" class="text-xs text-muted-foreground">{{ appStore.icpNumber || '' }}</span>
       <span v-if="showIcp && showPolice" class="opacity-50 text-xs text-muted-foreground">·</span>
       <template v-if="showPolice">
         <a
-          v-if="appStore.policeUrl" :href="appStore.policeUrl" target="_blank" rel="noopener noreferrer"
+          v-if="policeHref" :href="policeHref" target="_blank" rel="noopener noreferrer"
           class="transition-opacity hover:opacity-70"
         >
           <span class="text-xs text-muted-foreground">{{ appStore.policeNumber || '' }}</span>

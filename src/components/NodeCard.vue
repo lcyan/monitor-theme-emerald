@@ -27,6 +27,8 @@ const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 
 const offlineTime = computed(() => props.node.last_seen ? formatDateTime(new Date(props.node.last_seen * 1000)) : '')
 const expiredDate = computed(() => props.node.expires_at ? formatDateTime(props.node.expires_at, 'YYYY-MM-DD') : '')
+/** 刚连上（online 且 metrics 为 null）：绿点已亮，但还没有第一帧数据 */
+const waitingForData = computed(() => props.node.online && props.node.metrics == null)
 
 const cpu = computed(() => props.node.metrics?.cpu ?? 0)
 const cpuStatus = computed(() => getStatus(cpu.value))
@@ -70,7 +72,15 @@ function openPingDialog() {
             :class="[props.node.online ? 'bg-emerald-600' : 'bg-red-600']"
           />
         </div>
-        <div class="text-md font-bold flex-1 min-w-0 truncate">
+        <DataTooltip
+          v-if="props.node.public_remark" placement="top" :content="props.node.public_remark"
+          class="min-w-0 flex-1 truncate" content-class="whitespace-pre-wrap w-max max-w-72"
+        >
+          <div class="text-md font-bold min-w-0 truncate">
+            {{ props.node.name }}
+          </div>
+        </DataTooltip>
+        <div v-else class="text-md font-bold flex-1 min-w-0 truncate">
           {{ props.node.name }}
         </div>
       </div>
@@ -183,6 +193,12 @@ function openPingDialog() {
             <span class="text-sm text-red-600">离线</span>
             <div>{{ offlineTime }}</div>
           </div>
+          <div
+            v-else-if="waitingForData"
+            class="absolute inset-0 z-10 flex flex-col items-center justify-center space-y-1"
+          >
+            <span class="text-sm animate-pulse text-muted-foreground">等待数据</span>
+          </div>
           <div class="flex flex-col gap-y-2" :class="[!props.node.online && 'blur-xs opacity-60 pointer-events-none']">
             <div class="flex items-center">
               <span class="truncate">
@@ -206,7 +222,7 @@ function openPingDialog() {
               </span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
               <span class="truncate">
-                {{ props.node.metrics && props.node.metrics.uptime > 0 ? formatUptime(props.node.metrics.uptime) : '' }}
+                {{ props.node.metrics && props.node.metrics.uptime > 0 ? formatUptime(props.node.metrics.uptime) : (waitingForData ? '—' : '') }}
               </span>
             </div>
             <div class="flex items-center justify-between">

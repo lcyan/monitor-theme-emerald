@@ -64,7 +64,13 @@ function monitorThemeTar(): Plugin {
 
         const sha = createHash('sha256').update(readFileSync(output)).digest('hex')
         writeFileSync(`${output}.sha256`, `${sha}\n`)
-        const sizeMB = (statSync(output).size / 1024 / 1024).toFixed(2)
+        const size = statSync(output).size
+        const sizeMB = (size / 1024 / 1024).toFixed(2)
+        // hub 拒收超过 32 MiB 的主题包，超限直接让构建失败
+        if (size > 32 * 1024 * 1024) {
+          rmSync(output, { force: true })
+          throw new Error(`[monitor-theme-tar] theme.tar.gz is ${sizeMB} MB, exceeding the 32 MiB hub limit`)
+        }
         console.log(`[monitor-theme-tar] Created theme.tar.gz (${sizeMB} MB), sha256 ${sha}`)
       }
       finally {

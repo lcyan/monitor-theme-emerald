@@ -13,6 +13,9 @@ export type ThemeMode = 'auto' | 'light' | 'dark'
 export type NodeViewMode = 'card' | 'list'
 export type EarthViewMode = 'earth' | 'earth-stop' | 'maps' | 'cards' | 'hide'
 
+/** 「全部节点」的哨兵值：不与任何分组名共用字符串空间（规范要求） */
+export const ALL_GROUPS = '__all__'
+
 /** 固定的字节精度配置 */
 const BYTE_DECIMALS: ByteDecimalsConfig = {
   B: 0,
@@ -31,7 +34,13 @@ const useAppStore = defineStore('app', () => {
 
   const themeMode = useStorageAsync<ThemeMode>('themeMode', 'auto', localStorage)
   const lang = ref<'zh-CN' | 'en-US'>('zh-CN')
-  const nodeSelectedGroup = useStorageAsync<string>('nodeSelectedGroup', 'all', localStorage)
+  const nodeSelectedGroup = useStorageAsync<string>('nodeSelectedGroup', ALL_GROUPS, localStorage)
+
+  // 旧版本把「全部」存成字面量 'all'，与分组名共用字符串空间，迁移为哨兵值
+  watch(nodeSelectedGroup, (value) => {
+    if (value === 'all')
+      nodeSelectedGroup.value = ALL_GROUPS
+  }, { immediate: true })
 
   // 首页滚动位置记忆
   const homeScrollPosition = ref(0)
@@ -105,7 +114,12 @@ const useAppStore = defineStore('app', () => {
   const alertContent = computed(() => settings.value.alertContent)
 
   const earthViewMode = computed<EarthViewMode>(() => settings.value.earthViewMode)
-  const chartTimeRanges = computed<ChartTimeRange[]>(() => parseChartRanges(settings.value.chartTimeRanges))
+  /** hub 历史保留天数换算的小时上限；me 未加载或旧版 hub 缺省时为 undefined */
+  const historyMaxHours = computed(() => {
+    const days = me.value?.history_days
+    return typeof days === 'number' && days >= 1 ? days * 24 : undefined
+  })
+  const chartTimeRanges = computed<ChartTimeRange[]>(() => parseChartRanges(settings.value.chartTimeRanges, historyMaxHours.value))
   const visitorInfoCardEnabled = computed(() => settings.value.visitorInfoCardEnabled)
   const hideAdminEntryWhenLoggedOut = computed(() => settings.value.hideAdminEntryWhenLoggedOut)
   const disablePageAnimation = computed(() => settings.value.disablePageAnimation)

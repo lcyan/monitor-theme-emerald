@@ -100,7 +100,7 @@ const monthlyAverageCostText = computed(() => {
     return '-'
 
   // 买断没有月均的概念
-  if ((financeHelper.BILLING_CYCLE_DAYS[data.value.billing_cycle] ?? 0) <= 0)
+  if (financeHelper.billingCycleDays(data.value.billing_cycle) <= 0)
     return appStore.lang === 'zh-CN' ? '不适用' : 'N/A'
 
   const monthlyAverageCost = financeHelper.calculateMonthlyAverageCostCNY(data.value, exchangeRates.value)
@@ -169,6 +169,16 @@ const metricCards = computed<MetricCard[]>(() => {
       icon: 'tabler:coins',
     },
   ]
+})
+
+/** online 但 metrics 尚未上报：刚连上，等待第一帧数据 */
+const waitingForData = computed(() => Boolean(data.value?.online) && data.value?.metrics == null)
+
+const onlineBadgeVariant = computed(() => (data.value?.online ? 'default' : 'destructive'))
+const onlineBadgeText = computed(() => {
+  if (waitingForData.value)
+    return '等待上报'
+  return data.value?.online ? '在线' : '离线'
 })
 
 const hardwareInfo = computed<InfoItem[]>(() => [
@@ -256,10 +266,14 @@ const billingPeriodText = computed(() => {
           >
           <span>{{ data.name }}</span>
         </div>
-        <Badge :variant="data.online ? 'default' : 'destructive'" class="text-xs !rounded">
-          {{ data.online ? '在线' : '离线' }}
+        <Badge :variant="onlineBadgeVariant" class="text-xs !rounded">
+          {{ onlineBadgeText }}
         </Badge>
       </div>
+
+      <p v-if="data.public_remark" class="px-4 text-sm break-all text-muted-foreground">
+        {{ data.public_remark }}
+      </p>
 
       <div class="px-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <CardX

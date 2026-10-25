@@ -1,7 +1,7 @@
 /**
- * 负载 / 延迟图的时间档位。hub 的「历史保留天数」没有公开接口可查，档位由
- * 后台设置 `chartTimeRanges`（逗号分隔的小时数）决定，站长按自己的保留期
- * 取舍——比如只保留 30 天就去掉 2160。
+ * 负载 / 延迟图的时间档位。hub 的历史保留天数从 /api/me 的 history_days 读取
+ * （1–365），档位据此自动收窄；站长仍可用 `chartTimeRanges`（逗号分隔的小时数）
+ * 自定义档位集合，两道约束取交集。
  */
 
 export interface ChartTimeRange {
@@ -10,8 +10,9 @@ export interface ChartTimeRange {
 }
 
 export const DEFAULT_CHART_RANGES = '1,6,24,168,720,2160'
+const DEFAULT_RANGE_HOURS = [1, 6, 24, 168, 720, 2160]
 
-/** hub 匿名上限 168h，登录 2160h（超出部分 hub 会静默 clamp），配置再大没意义 */
+/** hub 的上限是 history_days×24（本模块收窄）；旧版 hub 缺省时以 2160 兜底，超出部分 hub 会静默 clamp */
 const MAX_RANGE_HOURS = 2160
 
 function toChartRange(hours: number): ChartTimeRange {
@@ -20,17 +21,25 @@ function toChartRange(hours: number): ChartTimeRange {
     : { label: `${hours} 小时`, hours }
 }
 
-/** 解析后台配置；非法 token 丢弃、去重升序，全部非法时回落默认档位 */
-export function parseChartRanges(raw: string | undefined | null): ChartTimeRange[] {
+/** history_days×24 与固定上限取小；未知（旧版 hub）时只受固定上限约束 */
+function rangeCeiling(maxHours?: number): number {
+  return typeof maxHours === 'number' && maxHours >= 1
+    ? Math.min(maxHours, MAX_RANGE_HOURS)
+    : MAX_RANGE_HOURS
+}
+
+/** 解析后台配置；非法 token 丢弃、去重升序，按保留期收窄，全部非法时回落默认档位 */
+export function parseChartRanges(raw: string | undefined | null, maxHours?: number): ChartTimeRange[] {
+  const ceiling = rangeCeiling(maxHours)
   const hoursList = [...new Set(
     (raw ?? '')
       .split(',')
       .map(token => Number.parseInt(token.trim(), 10))
-      .filter(hours => Number.isInteger(hours) && hours >= 1 && hours <= MAX_RANGE_HOURS),
+      .filter(hours => Number.isInteger(hours) && hours >= 1 && hours <= ceiling),
   )].sort((a, b) => a - b)
 
   if (!hoursList.length)
-    return parseChartRanges(DEFAULT_CHART_RANGES)
+    return DEFAULT_RANGE_HOURS.filter(hours => hours <= ceiling).map(toChartRange)
 
   return hoursList.map(toChartRange)
 }

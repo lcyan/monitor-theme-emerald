@@ -1,4 +1,5 @@
 import type { Node } from '@/api/types'
+import { fetchWithTimeout } from '@/api/external'
 import { daysUntilDate } from '@/utils/helper'
 
 const FINANCE_CURRENCY_CONFIG = {
@@ -84,6 +85,8 @@ interface ExchangeRatesCache {
 
 const CACHE_KEY = 'emerald_finance_exchange_rates_cny_v1'
 const MONTH_DAYS = 30
+/** `<n>m` 计费周期形态：1–1200 个月 */
+const MONTHS_CYCLE_REGEX = /^(\d{1,4})m$/
 
 /**
  * 计费周期的日历天数（monitor 的 billing_cycle 枚举），
@@ -97,6 +100,14 @@ export const BILLING_CYCLE_DAYS: Record<string, number> = {
   biennial: 730,
   triennial: 1095,
   once: 0,
+}
+
+/** `<n>m`（1–1200 月）形态按 n×30 天折算；未知周期返回 0（按买断处理） */
+export function billingCycleDays(cycle: string): number {
+  if (cycle in BILLING_CYCLE_DAYS)
+    return BILLING_CYCLE_DAYS[cycle]!
+  const months = MONTHS_CYCLE_REGEX.exec(cycle)
+  return months ? Number(months[1]) * MONTH_DAYS : 0
 }
 
 export const DEFAULT_EXCHANGE_RATES = Object.fromEntries(
@@ -216,7 +227,7 @@ export function calculateMonthlyAverageCostCNY(
   if (priceCNY <= 0)
     return 0
 
-  const cycleDays = BILLING_CYCLE_DAYS[node.billing_cycle] ?? 0
+  const cycleDays = billingCycleDays(node.billing_cycle)
   if (cycleDays <= 0)
     return 0
 
@@ -228,7 +239,7 @@ export function calculateRemainingValueCNY(
   exchangeRates: ExchangeRates,
   now = new Date(),
 ): number {
-  const cycleDays = BILLING_CYCLE_DAYS[node.billing_cycle] ?? 0
+  const cycleDays = billingCycleDays(node.billing_cycle)
   // 买断或未知周期没有"剩余"的概念
   if (cycleDays <= 0)
     return 0
@@ -332,18 +343,6 @@ async function fetchExchangeRates(): Promise<ExchangeRates | null> {
   }
 
   return null
-}
-
-export async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<Response> {
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    return await fetch(url, { signal: controller.signal })
-  }
-  finally {
-    window.clearTimeout(timeoutId)
-  }
 }
 
 function readCachedExchangeRates(): { date: string, rates: ExchangeRates } | null {

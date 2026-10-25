@@ -12,7 +12,7 @@ import { Empty } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
-import { useAppStore } from '@/stores/app'
+import { ALL_GROUPS, useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { isRegionMatch } from '@/utils/regionHelper'
 
@@ -56,7 +56,7 @@ watch(searchText, (value) => {
 })
 
 const groups = computed(() => [
-  { tab: '全部节点', name: 'all' },
+  { tab: '全部节点', name: ALL_GROUPS },
   ...nodesStore.groups.map(g => ({ tab: g, name: g })),
 ])
 
@@ -64,8 +64,8 @@ watch(
   () => nodesStore.groups,
   (gs) => {
     const cur = appStore.nodeSelectedGroup
-    if (cur !== 'all' && !gs.includes(cur)) {
-      appStore.nodeSelectedGroup = 'all'
+    if (cur !== ALL_GROUPS && !gs.includes(cur)) {
+      appStore.nodeSelectedGroup = ALL_GROUPS
     }
   },
   { immediate: true },
@@ -88,7 +88,7 @@ function isNodeMatchSearch(node: Node, search: string): boolean {
 }
 
 function isNodeInGroup(node: Node, selectedGroup: string): boolean {
-  return selectedGroup === 'all' || (node.group ?? '') === selectedGroup
+  return selectedGroup === ALL_GROUPS || (node.group ?? '') === selectedGroup
 }
 
 const groupNodeList = computed(() => {

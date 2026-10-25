@@ -6,8 +6,16 @@
  * 主题侧的 TypeScript 表达，不做与 Komari 的兼容层。
  */
 
-/** 计费周期；`once` 为一次性（买断），不参与剩余价值计算 */
-export type BillingCycle = 'monthly' | 'quarterly' | 'semiannual' | 'yearly' | 'biennial' | 'triennial' | 'once'
+/** 计费周期；`once` 为一次性（买断），不参与剩余价值计算；`<n>m` 为 n 个月（1–1200） */
+export type BillingCycle
+  = | 'monthly'
+    | 'quarterly'
+    | 'semiannual'
+    | 'yearly'
+    | 'biennial'
+    | 'triennial'
+    | 'once'
+    | `${number}m`
 
 /** 流量计量方式：仅上行 / 仅下行 / 取双向较大者 / 双向求和（hub 默认） */
 export type TrafficMode = 'up' | 'down' | 'max' | 'sum'
@@ -45,6 +53,8 @@ export interface Node {
   country: string
   /** 站长设置的分组名，空串为未分组；旧版 hub 可能缺省 */
   group?: string
+  /** 公开备注，最多 100 字纯文本，匿名可见 */
+  public_remark?: string
   /** Unix 秒。在线时为最近一次上报，离线时为最后可见时间 */
   last_seen: number
   /** 离线或尚未上报时为 null；坏帧经 safeNodes 置 null */
@@ -81,13 +91,16 @@ export interface Node {
   day_tx: number
 }
 
-/** /api/nodes 与 /api/ws 帧的共同形状；admin 表示该浏览器已登录 */
+/** /api/nodes 与 /api/ws 帧的共同形状 */
 export interface NodesFrame {
   nodes: Node[]
-  admin: boolean
 }
 
-/** metrics 历史行：cpu 为百分比，其余单位 B（net 为该桶均速 B/s） */
+/**
+ * metrics 历史行：cpu 为百分比，其余单位 B（net 为该桶均速 B/s）。
+ * minutes 为该桶在线分钟数（满额 = step÷60，可算窗口在线率）；
+ * cpu/net_*_max 为桶内峰值；旧版 hub 可能不带这些字段。
+ */
 export interface MetricRow {
   ts: number
   cpu: number
@@ -95,6 +108,10 @@ export interface MetricRow {
   disk_used: number
   net_rx: number
   net_tx: number
+  minutes?: number
+  cpu_max?: number
+  net_rx_max?: number
+  net_tx_max?: number
 }
 
 /**
@@ -123,8 +140,8 @@ export interface MetricsResponse {
 /** GET /api/me */
 export interface Me {
   authed: boolean
-  github: boolean
   site_name: string
   public_page: boolean
-  site: string
+  /** hub 的历史保留天数（1–365），档位与 hours 参数都受它约束；旧版 hub 可能缺省 */
+  history_days?: number
 }

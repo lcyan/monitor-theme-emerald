@@ -14,11 +14,12 @@ This document applies to `/src` only. The app is a monitor hub theme: a pure sta
 ## Data layer (`src/api/`) — the only place that talks to the hub
 
 - `client.ts` — `api<T>()` fetch wrapper and `ApiError.status`. The hub answers errors as one line of `text/plain`; a 200 that is not JSON is a proxy page, not data.
-- `types.ts` — hub-native data structures (`Node`, `Metrics`, history rows). Field semantics come from the hub source (`node_view`, `db.rs`); keep them in sync rather than inventing an adapter layer.
-- `live.ts` — `startLive()`: one `GET /api/nodes`, then `/api/ws` (hub pushes every 2 s). On disconnect: 5 s polling + 5 s reconnect until a frame arrives. `safeNodes()` must guard every consumer from a malformed metrics report (set `metrics: null`, never drop the node).
+- `types.ts` — hub-native data structures (`Node`, `Metrics`, history rows). Field semantics come from the hub source (`node_view`, `db.rs`); keep them in sync rather than inventing an adapter layer. Keys an anonymous visitor cannot see may be **absent** (not empty strings) — model them optional.
+- `live.ts` — `startLive()`: one `GET /api/nodes`, then `/api/ws?gzip` (hub pushes every 2 s; binary gzip frames and text frames are both handled, older browsers fall back to plain `/api/ws`). On disconnect: 5 s polling + 5 s reconnect until a frame arrives. On `visibilitychange` the stream and polling pause while hidden and resume with an immediate fetch when visible. A 401 (public page closed) stops polling and reconnecting. `safeNodes()` must guard every consumer from a malformed metrics report (set `metrics: null`, never drop the node).
 - `config.ts` — theme settings. Defaults are baked in from `theme.json` at build time; saved overrides from `GET /api/themes/emerald/config` are validated per field (type / options / min / max) and anything invalid falls back to the default. Never trust a saved value.
-- `history.ts` — the single entry point for history requests: client-side concurrency cap of 2, exponential backoff on 503 (the hub refuses beyond 4 concurrent history windows), dedupe + TTL cache keyed by `(nodeId, hours, points, series)`. LoadChart, PingChart and the list ping cells all go through this; do not fetch `/metrics` anywhere else.
-- `me.ts` — `/api/me` (`site_name`, `authed`, `public_page`).
+- `history.ts` — the single entry point for history requests: client-side concurrency cap of 3, exponential backoff on 503 (the hub refuses beyond 4 concurrent history windows), dedupe + TTL cache keyed by `(nodeId, hours, points, series)`, and row-level sanitization (a malformed history row is dropped, never let NaN reach a chart). LoadChart, PingChart and the list ping cells all go through this; do not fetch `/metrics` anywhere else.
+- `me.ts` — `/api/me` (`site_name`, `authed`, `public_page`, `history_days`). `history_days` caps chart time ranges (`parseChartRanges` takes the max hours).
+- `external.ts` — third-party lookups that are **not** part of the hub contract: visitor IP geolocation (5-source fallback) and the shared `fetchWithTimeout`/`fetchJson` transport. All transport lives in `src/api/`; utils and components only consume results.
 
 ## Authoring conventions
 
@@ -53,7 +54,7 @@ When you need a new piece of UI:
 
 - `LoadChart.vue` — history via `series=metrics` (cpu / memory / disk / net only; the hub thins rows itself, do not refill gaps client-side). Realtime view seeds with `hours=1` then appends one point per WS metrics change; swap, load, TCP/UDP and process counts exist only in realtime frames, so those cards render only there.
 - `PingChart.vue` — via `series=ping`; probe names come from the response's `probes` map, series order is the rows' first-appearance order (the hub pre-sorts). Window loss uses only the response-level `loss` map, never row values; `band` rows draw a min–max ribbon.
-- `useNodePingStats.ts` — one `fetchHistory(id, { hours: 1, points: 10, series: 'ping' })` per node; visibility-gated by the callers. `useNodePingDisplay.ts` turns that into render bars and the top-3 probe selection honoring `pingNetworkOrder`.
+- `useNodePingStats.ts` — one `fetchHistory(id, { hours: 1, points: 60, series: 'ping' })` per node (60 is the hub's `points` floor; the display buckets are fewer); visibility-gated by the callers. `useNodePingDisplay.ts` turns that into render bars and the top-3 probe selection honoring `pingNetworkOrder`.
 
 ## Stores
 
@@ -64,13 +65,12 @@ When you need a new piece of UI:
 
 ## Utils
 
-- `src/utils` owns formatting and lookups only — **no transport**. All hub access lives in `src/api/`.
+- `src/utils` owns formatting and lookups only — **no transport**. All hub access lives in `src/api/`, third-party lookups in `src/api/external.ts`.
 - `helper.ts` — bytes / uptime / percentage / date formatting, `daysUntilDate` for YYYY-MM-DD calendar math.
 - `nodeHelpers.ts` — node-derived display values (price tags, expire status via `expires_in` first, traffic via `month_used` first).
-- `financeHelper.ts` — currency conversion and `billing_cycle` enum → days (`BILLING_CYCLE_DAYS`; `once` has no remaining value).
+- `financeHelper.ts` — currency conversion and `billing_cycle` → days (`billingCycleDays`: named enums plus the `<n>m` months form; `once` has no remaining value).
 - `regionHelper.ts` — ISO code → zh/en name table + `/flags/` path. No emoji parsing.
 - `geoHelper.ts` — ISO code → `[lat, lng]` for the globe and dot map.
-- `recordHelper.ts` — generic chart smoothing (`interpolateNullsLinear`, `cutPeakValues`) accepting numeric `ts` rows.
 - `@/utils/message` is the wrapper exposed as `window.$message`. It calls into `vue-sonner`'s `toast`.
 
 ## App globals

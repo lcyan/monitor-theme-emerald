@@ -23,13 +23,10 @@ async function failure(res: Response): Promise<ApiError> {
   )
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function api<T>(path: string): Promise<T> {
   let res: Response
   try {
-    res = await fetch(`/api${path}`, {
-      ...init,
-      headers: init?.body ? { 'content-type': 'application/json', ...init?.headers } : init?.headers,
-    })
+    res = await fetch(`/api${path}`)
   }
   catch {
     throw new ApiError(0, '网络连接失败，稍后再试')

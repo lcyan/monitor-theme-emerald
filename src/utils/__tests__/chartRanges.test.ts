@@ -41,4 +41,18 @@ describe('parseChartRanges', () => {
     expect(parseChartRanges('36')[0]!.label).toBe('36 小时')
     expect(parseChartRanges('48')[0]!.label).toBe('2 天')
   })
+
+  test('按 history_days×24 收窄档位', () => {
+    // 保留 7 天：168 及以下保留
+    expect(parseChartRanges('1,6,24,168,720,2160', 7 * 24).map(r => r.hours)).toEqual([1, 6, 24, 168])
+    // 保留 30 天
+    expect(parseChartRanges(DEFAULT_CHART_RANGES, 30 * 24).map(r => r.hours)).toEqual([1, 6, 24, 168, 720])
+    // 收窄后全部档位越界：回落默认档位再按上限过滤
+    expect(parseChartRanges('720,2160', 24).map(r => r.hours)).toEqual([1, 6, 24])
+  })
+
+  test('history_days 未知时仅受固定上限约束', () => {
+    expect(parseChartRanges(DEFAULT_CHART_RANGES, undefined).map(r => r.hours)).toEqual([1, 6, 24, 168, 720, 2160])
+    expect(parseChartRanges(DEFAULT_CHART_RANGES, 0).map(r => r.hours)).toEqual([1, 6, 24, 168, 720, 2160])
+  })
 })

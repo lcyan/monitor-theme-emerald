@@ -77,10 +77,10 @@ const baseTooltipConfig = computed(() => ({
 const chartMargin = { top: 30, right: 24, bottom: 32, left: 56 }
 const chartMarginWithLegend = { top: 30, right: 24, bottom: 52, left: 56 }
 
-// 时间档位来自后台设置 chartTimeRanges；超出 168h 的档位仅登录可见（hub 匿名上限 168h）
+// 时间档位来自后台设置 chartTimeRanges，已按 /api/me 的 history_days 自动收窄
 const availableViews = computed<{ label: string, hours?: number }[]>(() => [
   { label: '实时' },
-  ...appStore.chartTimeRanges.filter(range => range.hours <= 168 || appStore.authed),
+  ...appStore.chartTimeRanges,
 ])
 
 const selectedView = ref('实时')
@@ -98,6 +98,7 @@ watch(availableViews, (views) => {
 /**
  * 图表行。monitor 的历史行只有 cpu / mem / disk / net（hub 分桶返回）；
  * swap、load、tcp/udp、procs 只在实时视图由 WS 帧追加，历史窗口里为 null。
+ * cpu/net 峰值与 minutes 在线分钟数是可选字段，WS 追加点不带。
  */
 interface ChartPoint {
   ts: number
@@ -111,6 +112,10 @@ interface ChartPoint {
   tcp: number | null
   udp: number | null
   procs: number | null
+  cpu_max: number | null
+  net_rx_max: number | null
+  net_tx_max: number | null
+  minutes: number | null
 }
 
 const rows = shallowRef<ChartPoint[]>([])
@@ -136,6 +141,10 @@ function rowToChartPoint(row: MetricRow): ChartPoint {
     tcp: null,
     udp: null,
     procs: null,
+    cpu_max: row.cpu_max ?? null,
+    net_rx_max: row.net_rx_max ?? null,
+    net_tx_max: row.net_tx_max ?? null,
+    minutes: row.minutes ?? null,
   }
 }
 
@@ -191,6 +200,10 @@ function appendLivePoint(): void {
     tcp: metrics.tcp,
     udp: metrics.udp,
     procs: metrics.procs,
+    cpu_max: null,
+    net_rx_max: null,
+    net_tx_max: null,
+    minutes: null,
   }
 
   const last = rows.value.at(-1)
@@ -216,6 +229,23 @@ const latestStatus = computed(() => {
   if (metrics)
     return metrics
   return null
+})
+
+/**
+ * 窗口在线率：hub 历史行的 minutes 为该桶在线分钟数（满额 = step÷60）。
+ * 满额按首尾时间跨度均摊出的桶宽估算，只统计带 minutes 的历史行。
+ */
+const onlineRateText = computed<string | null>(() => {
+  const sampled = rows.value.filter((r): r is ChartPoint & { minutes: number } => typeof r.minutes === 'number')
+  if (sampled.length < 2)
+    return null
+  const first = sampled[0]!
+  const last = sampled.at(-1)!
+  const stepMinutes = (last.ts - first.ts) / (sampled.length - 1) / 60
+  if (stepMinutes <= 0)
+    return null
+  const rate = sampled.reduce((sum, r) => sum + r.minutes, 0) / (sampled.length * stepMinutes)
+  return `在线率 ${(Math.min(rate, 1) * 100).toFixed(1)}%`
 })
 
 function formatTime(ts: number, showDate: boolean): string {
@@ -298,6 +328,8 @@ const cpuChartOption = computed(() => ({
         const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color};margin-right:8px;flex-shrink:0"></span>`
         if (item.seriesName === 'CPU') {
           html += `<div style="display:flex;align-items:center">${colorDot}<span>CPU</span><span style="margin-left:auto;font-weight:600;margin-left:16px">${item.value?.toFixed(1) ?? '-'}%</span></div>`
+          if (record.cpu_max != null)
+            html += `<div style="display:flex;align-items:center;padding-left:16px"><span style="color:${chartThemeColors.value.textSecondary}">峰值</span><span style="margin-left:auto;font-weight:600;margin-left:16px">${record.cpu_max.toFixed(1)}%</span></div>`
         }
         else if (item.seriesName === '负载') {
           html += `<div style="display:flex;align-items:center">${colorDot}<span>系统负载</span><span style="margin-left:auto;font-weight:600;margin-left:16px">${item.value?.toFixed(2) ?? '-'}</span></div>`
@@ -537,8 +569,10 @@ const networkChartOption = computed(() => ({
 
       for (const item of p) {
         const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color};margin-right:8px;flex-shrink:0"></span>`
-        const label = item.seriesName === '下载' ? '↓ 下载' : '↑ 上传'
-        html += `<div style="display:flex;align-items:center">${colorDot}<span>${label}</span><span style="margin-left:auto;font-weight:600;margin-left:16px">${formatBytes(item.value ?? 0)}/s</span></div>`
+        const isDown = item.seriesName === '下载'
+        const label = isDown ? '↓ 下载' : '↑ 上传'
+        const peak = isDown ? record.net_rx_max : record.net_tx_max
+        html += `<div style="display:flex;align-items:center">${colorDot}<span>${label}</span><span style="margin-left:auto;font-weight:600;margin-left:16px">${formatBytes(item.value ?? 0)}/s${peak != null ? `（峰 ${formatBytes(peak)}/s）` : ''}</span></div>`
       }
       html += '</div>'
       return html
@@ -743,17 +777,20 @@ onMounted(() => {
 
 <template>
   <div class="flex flex-col gap-4">
-    <!-- 时间选择器 -->
-    <Tabs v-model="selectedView" class="w-full items-center">
-      <TabsList :class="pickSurfaceClass('h-8 bg-background/60 pointer-events-auto rounded-md', 'h-8 bg-background/50 backdrop-blur-xl pointer-events-auto rounded-md')">
-        <TabsTrigger
-          v-for="view in availableViews" :key="view.label" :value="view.label"
-          class="h-6.5 text-xs border-none data-[state=active]:text-emerald-600 shadow-none rounded-sm"
-        >
-          {{ view.label }}
-        </TabsTrigger>
-      </TabsList>
-    </Tabs>
+    <!-- 时间选择器 + 窗口在线率 -->
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <Tabs v-model="selectedView" class="min-w-0 flex-1 items-center">
+        <TabsList :class="pickSurfaceClass('h-8 bg-background/60 pointer-events-auto rounded-md', 'h-8 bg-background/50 backdrop-blur-xl pointer-events-auto rounded-md')">
+          <TabsTrigger
+            v-for="view in availableViews" :key="view.label" :value="view.label"
+            class="h-6.5 text-xs border-none data-[state=active]:text-emerald-600 shadow-none rounded-sm"
+          >
+            {{ view.label }}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <span v-if="onlineRateText" class="shrink-0 text-xs text-muted-foreground">{{ onlineRateText }}</span>
+    </div>
 
     <!-- 内容区域 -->
     <Spinner :show="loading">
